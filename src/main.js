@@ -23,6 +23,11 @@ const {
   findViewInDoc,
 } = require('./bases-filters');
 const { createCalendarHelpers } = require('./calendar-helpers');
+const {
+  createAdapterIO,
+  createCalendarEventsCache,
+  resolveCalendarEvents,
+} = require('./calendar-events-cache');
 const { createTaskNotesAdapter } = require('./tasknotes-adapter');
 const { mapTaskInfo } = require('./task-mapper');
 
@@ -55,11 +60,18 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     });
     this._calendarUnsubs = [];
     this._calendarSubscribed = new Set();
+    this._calendarEventsCache = [];
+    this._calendarSyncObserved = false;
     this._viewPathCache = new Map();
     this._taskSnapshot = null;
     this._viewFilterGen = 0;
     this._viewFilterWarned = new Set();
+    this._calendarCacheStore = createCalendarEventsCache(
+      createAdapterIO(this.app.vault.adapter, this.manifest.dir),
+    );
+    this.register(() => this._calendarCacheStore.cancelScheduledSave());
     await this.loadSettings();
+    this._calendarEventsCache = await this._calendarCacheStore.load();
     this.addSettingTab(new AgendaSettingTab(this.app, this));
 
     this.registerView(VIEW_TYPE_AGENDA, (leaf) => new AgendaPane(leaf, this));
@@ -261,7 +273,10 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
   subscribeCalendarServices() {
     this.subscribeTaskNotesLifecycle();
     const { unsubs, subscribed } = this.adapter.subscribeCalendarDataChanged(
-      this._refresh,
+      () => {
+        this._calendarSyncObserved = true;
+        this._refresh();
+      },
       this._calendarSubscribed,
     );
     for (const unsub of unsubs) this._calendarUnsubs.push(unsub);
@@ -308,7 +323,17 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
   getCalendarEvents() {
     // TaskNotes may finish booting after us — keep trying to attach listeners.
     this.subscribeCalendarServices();
-    return this.adapter.listCalendarEvents();
+    const live = this.adapter.listCalendarEvents();
+    const resolved = resolveCalendarEvents({
+      live,
+      cache: this._calendarEventsCache,
+      syncObserved: this._calendarSyncObserved,
+    });
+    if (resolved.shouldPersist) {
+      this._calendarEventsCache = resolved.persistEvents;
+      this._calendarCacheStore.scheduleSave(resolved.persistEvents);
+    }
+    return resolved.events;
   }
 
   // Events for a day key map, optionally dropping ones that already ended today.
