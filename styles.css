@@ -1,0 +1,408 @@
+/* TaskNotes Timeline Wrapper — uses Obsidian theme variables, so it inherits the active theme. */
+
+/* the standalone workspace pane */
+.fw-agenda-view { padding: 16px 14px; overflow-y: auto; }
+
+.fw-agenda {
+  width: 100%;
+  min-width: 0;
+  font-family: var(--font-interface);
+  color: var(--text-normal);
+  /* color knobs — dark inherits the active theme's --color-*; light mode overrides below */
+  --fw-todo: var(--color-green, #7aa06a);
+  --fw-day: var(--color-green, var(--text-accent));
+  --fw-unplanned-cat: var(--color-yellow, #e8c07d); /* unplanned category header = its box color */
+  --fw-row-padding: 9px 6px;
+  --fw-row-gap: 10px;
+  --fw-title-size: 15px;
+  --fw-meta-size: 12px;
+  --fw-status-size: 22px;
+}
+.fw-agenda--compact {
+  --fw-row-padding: 4px 4px;
+  --fw-row-gap: 8px;
+  --fw-title-size: 14px;
+  --fw-meta-size: 11px;
+  --fw-status-size: 18px;
+}
+
+/* Native buttons retain keyboard behavior without inheriting theme button chrome. */
+:where(.fw-agenda) button:where(.fw-stat, .fw-agenda__events-toggle, .fw-agenda__input-advanced, .fw-agenda__input-enter, .fw-agenda__dayhead, .fw-task__status) {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  white-space: normal;
+}
+.fw-agenda :is(button, [role="button"], input):focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 3px;
+}
+.fw-agenda button:disabled { opacity: 0.5; cursor: wait; }
+.fw-agenda__filter-error {
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--color-red, #cc5a5a);
+  border-radius: 8px;
+  color: var(--text-normal);
+  overflow-wrap: anywhere;
+}
+.fw-agenda__filter-error button { margin-top: 8px; }
+
+/* light mode — also covers Forest Light picked while base mode is still dark */
+body.theme-light .fw-agenda,
+body.theme-dark.forest-theme-light .fw-agenda {
+  --fw-todo: #3cc45c;
+  --fw-day: #31a34c;
+  --fw-unplanned-cat: #c69a51;
+}
+
+/* header — more air between the date line and the title */
+.fw-agenda__dateline {
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 8px 0 15px;
+  font-weight: 700;
+}
+.fw-agenda__dateline .fw-sep { margin: 0 7px; opacity: 0.5; }
+
+.fw-agenda__view-filter {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+  opacity: 0.85;
+}
+
+.fw-agenda__title-row {
+  position: relative;
+  margin-bottom: 20px;
+  padding: 0 36px;
+}
+.fw-agenda__title {
+  text-align: center;
+  font-size: 23px;
+  font-weight: 700;
+  color: var(--text-normal);
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+.fw-agenda__events-toggle {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+.fw-agenda__events-toggle svg { width: 16px; height: 16px; }
+.fw-agenda__events-toggle:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.fw-agenda__events-toggle.is-active {
+  color: var(--interactive-accent);
+}
+
+/* stat tiles — colored, clickable, active on select */
+.fw-agenda__stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 15px;
+}
+.fw-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 9px;
+  padding: 6px 4px;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 100ms ease, box-shadow 100ms ease, filter 100ms ease;
+}
+.fw-stat:hover { transform: translateY(-1px); filter: brightness(1.08); }
+.fw-stat.is-active { box-shadow: 0 0 0 2px var(--interactive-accent); }
+.fw-stat__num { font-size: 19px; font-weight: 600; line-height: 1.1; }
+.fw-stat__label { font-size: 11px; color: var(--text-muted); }
+
+/* default tint per tile — the % is the knob; green needs more since it fights the green bg */
+.fw-stat--todo {
+  background: var(--background-secondary);
+  background: color-mix(in srgb, var(--fw-todo) 30%, var(--background-secondary));
+}
+.fw-stat--todo .fw-stat__num { color: var(--fw-todo); }
+.fw-stat--overdue {
+  background: var(--background-secondary);
+  background: color-mix(in srgb, var(--color-red, #cc5a5a) 24%, var(--background-secondary));
+}
+.fw-stat--overdue .fw-stat__num { color: var(--color-red, #cc5a5a); }
+.fw-stat--unplanned {
+  background: var(--background-secondary);
+  background: color-mix(in srgb, var(--color-yellow, #e8c07d) 22%, var(--background-secondary));
+}
+.fw-stat--unplanned .fw-stat__num { color: var(--color-yellow, #e8c07d); }
+
+/* new-task input */
+.fw-agenda__input {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  margin-bottom: 20px;
+}
+.fw-agenda__input-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 3px;
+}
+.fw-agenda__input-label { font-size: 12px; color: var(--text-muted); }
+.fw-agenda__input-advanced {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 5px;
+}
+.fw-agenda__input-advanced:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.fw-agenda__input-advanced svg { width: 14px; height: 14px; }
+.fw-agenda__input-row { display: flex; align-items: center; gap: 8px; }
+.fw-agenda__input-enter {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 6px;
+}
+.fw-agenda__input-enter:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.fw-agenda__input-enter svg { width: 16px; height: 16px; }
+.fw-agenda__input-field {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  padding: 0;
+  height: auto;
+  font-size: 15px;
+  color: var(--text-normal);
+}
+.fw-agenda__input-field::placeholder { color: var(--text-faint); }
+
+/* day / section headers */
+.fw-agenda button.fw-agenda__dayhead {
+  /* Keep section labels transparent even when a theme styles native buttons. */
+  background: transparent !important;
+  box-shadow: none !important;
+  border: 0 !important;
+  border-radius: 0;
+  height: auto;
+  display: flex;
+  width: 100%;
+  text-align: left;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 18px 0 9px;
+  padding: 0 0 6px;
+  cursor: pointer;
+}
+.fw-agenda__dayhead-left { display: flex; align-items: center; gap: 3px; }
+.fw-agenda__chevron {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+.fw-agenda__chevron svg { width: 15px; height: 15px; }
+.fw-agenda__dayhead.is-collapsed .fw-agenda__chevron { transform: rotate(-90deg); }
+.fw-agenda__dayhead-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fw-day);
+  letter-spacing: 0.01em;
+}
+.fw-agenda__dayhead--overdue .fw-agenda__dayhead-label { color: var(--color-red, #cc5a5a); }
+.fw-agenda__dayhead--unplanned .fw-agenda__dayhead-label { color: var(--fw-unplanned-cat); }
+.fw-agenda__dayhead-count { font-size: 12px; color: var(--text-muted); }
+
+/* task rows */
+.fw-task {
+  display: flex;
+  gap: var(--fw-row-gap);
+  padding: var(--fw-row-padding);
+  border-radius: 8px;
+  transition: background 120ms ease;
+}
+.fw-task:hover { background: var(--background-modifier-hover); }
+.fw-task__body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+.fw-task__dots {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+  height: fit-content;
+}
+.fw-agenda button.fw-task__status {
+  box-sizing: border-box;
+  width: var(--fw-status-size);
+  height: var(--fw-status-size);
+  min-width: 0;
+  padding: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 50%;
+  border: 2px solid #808080;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.fw-task__status:hover { background: var(--background-modifier-border); }
+.fw-task__priority {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #cccccc;
+}
+
+.fw-task__title {
+  font-size: var(--fw-title-size);
+  min-width: 0;
+  line-height: 1.35;
+  color: var(--text-normal);
+  cursor: pointer;
+}
+.fw-task__title:hover { color: var(--text-accent); text-decoration: underline; }
+.fw-task__title-row { display: flex; align-items: flex-start; gap: 5px; }
+.fw-task__overdue {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--color-red, #cc5a5a);
+  margin-top: 3px;
+}
+.fw-task__overdue svg { width: 13px; height: 13px; }
+.fw-task__overdue[hidden], .fw-event__now[hidden] { display: none !important; }
+
+.fw-task__meta {
+  font-size: var(--fw-meta-size);
+  line-height: 1.4;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+/* separators sit a step above the muted text they divide, so the sections read apart */
+.fw-task__meta .fw-sep {
+  margin: 0 4px;
+  opacity: 0.95;
+  color: var(--text-normal);
+  font-size: 15px;      /* size knob — inherits 12px from the meta row otherwise */
+  line-height: 0;       /* keeps the taller glyph from stretching the row */
+  position: relative;
+  top: 1px;             /* centering knob: the dot rides higher as it scales, so push it back down */
+}
+.fw-task__meta-key { color: var(--text-faint); }
+/* icon mode — sits a step brighter than the text label it replaces, since the icon
+   is now the only thing naming the field and --text-faint reads as noise at 13px */
+.fw-task__meta-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  margin-right: 4px;
+  vertical-align: -2px;
+}
+.fw-task__meta-icon svg { width: 13px; height: 13px; }
+.fw-task__tag {
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-size: var(--fw-meta-size);
+  overflow-wrap: anywhere;
+}
+.fw-task__tag + .fw-task__tag { margin-left: 4px; }
+
+.fw-agenda__empty {
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 14px 0;
+  text-align: center;
+}
+
+/* calendar events — distinct from tasks: color bar + icon instead of status ring */
+.fw-event {
+  background: color-mix(in srgb, var(--fw-event-color, var(--text-accent)) 10%, transparent);
+}
+.fw-event:hover {
+  background: color-mix(in srgb, var(--fw-event-color, var(--text-accent)) 18%, var(--background-modifier-hover));
+}
+.fw-event.fw-event--ongoing {
+  box-shadow: inset 0 0 0 1px var(--fw-event-color, var(--interactive-accent));
+  background: color-mix(in srgb, var(--fw-event-color, var(--interactive-accent)) 18%, transparent);
+}
+.fw-event__now {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--text-normal);
+  font-size: 0.9em;
+  font-weight: 600;
+  border: 1px solid var(--fw-event-color, var(--interactive-accent));
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.fw-agenda-undo { display: flex; align-items: center; gap: 12px; }
+.fw-agenda-undo > span { min-width: 0; overflow-wrap: anywhere; }
+.fw-agenda-undo button { flex-shrink: 0; }
+.fw-agenda-undo button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.fw-event__dots {
+  gap: 8px;
+  padding-top: 3px;
+}
+.fw-event__bar {
+  width: 3px;
+  align-self: stretch;
+  min-height: 18px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.fw-event__icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.fw-event__icon svg { width: 14px; height: 14px; }
+.fw-event__title {
+  font-weight: 400;
+  cursor: pointer;
+}
+.fw-event__time {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fw-agenda *, .fw-agenda *::before, .fw-agenda *::after { transition: none; }
+  .fw-stat:hover { transform: none; }
+}

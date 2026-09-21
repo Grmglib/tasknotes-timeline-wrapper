@@ -1,0 +1,15 @@
+{
+  "name": "tasknotes-timeline-wrapper",
+  "version": "1.3.0",
+  "private": true,
+  "description": "Obsidian plugin — TaskNotes Timeline Wrapper with optional calendar events",
+  "scripts": {
+    "build": "node esbuild.config.js production",
+    "dev": "node esbuild.config.js",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "moment": "^2.30.1"
+  }
+}

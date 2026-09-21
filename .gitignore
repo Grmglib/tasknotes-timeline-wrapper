@@ -1,0 +1,9 @@
+# macOS / editors / agent cruft
+.DS_Store
+*.log
+.claude/
+
+node_modules/
+
+# local plugin data (runtime settings, not source)
+data.json
