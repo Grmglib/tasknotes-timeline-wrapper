@@ -12,15 +12,8 @@ const {
   COMPLETION_UNDO_MS,
   DEFAULT_SETTINGS,
   META_ICONS,
-  DEFAULT_FIELDS,
-  DEFAULT_STATUSES,
-  DEFAULT_PRIORITIES,
-  GOOGLE_DEFAULT_COLOR,
-  MICROSOFT_DEFAULT_COLOR,
-  CALENDAR_SERVICE_KEYS,
 } = require('./constants');
 const { debounce, parseNonNegInt } = require('./utils');
-const { createFrontmatterHelpers } = require('./frontmatter');
 const { parseOptions } = require('./block-options');
 const {
   convertBasesFiltersToWhere,
@@ -29,15 +22,9 @@ const {
   viewsFromBaseDoc,
   findViewInDoc,
 } = require('./bases-filters');
-const {
-  findProviderCalendar,
-  calendarLabel,
-  calendarColor,
-  calendarIsEnabled,
-} = require('./calendar-providers');
 const { createCalendarHelpers } = require('./calendar-helpers');
-
-const { collectTags, orderTags, linkNames, normDate } = createFrontmatterHelpers(moment);
+const { createTaskNotesAdapter } = require('./tasknotes-adapter');
+const { mapTaskInfo } = require('./task-mapper');
 
 const {
   limitRecurringOccurrences,
@@ -58,6 +45,7 @@ const {
 
 module.exports = class TaskNotesTimelineWrapper extends Plugin {
   async onload() {
+    this.adapter = createTaskNotesAdapter(this.app);
     this.controllers = new Set();
     this._statusUpdates = new Set();
     this._completionUndos = new Map();
@@ -133,18 +121,12 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
   }
 
   subscribeTaskNotesLifecycle() {
-    const tn = this.getTaskNotes();
-    const api = tn && tn.api;
-    if (!api || !api.lifecycle || typeof api.lifecycle.on !== 'function') return;
     if (this._lifecycleSubscribed) return;
-    this._lifecycleSubscribed = true;
-    const bump = () => this._refresh();
-    try {
-      for (const name of ['cache.changed', 'cache.rebuilt', 'settings.changed']) {
-        const ref = api.lifecycle.on(name, bump);
-        if (ref) this.registerEvent(ref);
-      }
-    } catch (e) { /* optional API */ }
+    const ok = this.adapter.subscribeLifecycle(
+      () => this._refresh(),
+      (ref) => this.registerEvent(ref),
+    );
+    if (ok) this._lifecycleSubscribed = true;
   }
 
   async activateAgenda() {
@@ -158,13 +140,15 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
   }
 
   getTaskNotes() {
-    return this.app.plugins.plugins.tasknotes || null;
+    return this.adapter.getPlugin();
+  }
+
+  getCompatibility() {
+    return this.adapter.getCompatibility();
   }
 
   getViewsFolder() {
-    const tn = this.getTaskNotes();
-    const s = (tn && tn.settings) || {};
-    return (s.viewsFolder || s.defaultViewsFolder || 'TaskNotes/Views').replace(/\/$/, '');
+    return this.adapter.getConfig().viewsFolder;
   }
 
   listBaseFiles() {
@@ -246,12 +230,7 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
       const where = convertBasesFiltersToWhere(merged, warnings);
       if (warnings.length) throw new Error(`Filter not applied: ${warnings.join(' ')}`);
       if (!where) return { status: 'applied', paths: null };
-      const tn = this.getTaskNotes();
-      const api = tn && tn.api;
-      if (!api || typeof api.hasCapability !== 'function' || !api.hasCapability('query.tasks')) {
-        throw new Error('TaskNotes Runtime API query.tasks unavailable.');
-      }
-      const result = await api.query.tasks({
+      const result = await this.adapter.queryTasks({
         where,
         scope: { includeArchived: false },
       });
@@ -276,25 +255,17 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
   }
 
   hasCalendarIntegration() {
-    const tn = this.getTaskNotes();
-    if (!tn) return false;
-    return CALENDAR_SERVICE_KEYS.some((k) => tn[k] && typeof tn[k].getAllEvents === 'function');
+    return this.adapter.hasCalendarIntegration();
   }
 
   subscribeCalendarServices() {
-    const tn = this.getTaskNotes();
-    if (!tn) return;
     this.subscribeTaskNotesLifecycle();
-    for (const key of CALENDAR_SERVICE_KEYS) {
-      if (this._calendarSubscribed.has(key)) continue;
-      const svc = tn[key];
-      if (!svc || typeof svc.on !== 'function') continue;
-      try {
-        const unsub = svc.on('data-changed', this._refresh);
-        if (typeof unsub === 'function') this._calendarUnsubs.push(unsub);
-        this._calendarSubscribed.add(key);
-      } catch (e) { /* internal emitter — never break the agenda */ }
-    }
+    const { unsubs, subscribed } = this.adapter.subscribeCalendarDataChanged(
+      this._refresh,
+      this._calendarSubscribed,
+    );
+    for (const unsub of unsubs) this._calendarUnsubs.push(unsub);
+    this._calendarSubscribed = subscribed;
   }
 
   unsubscribeCalendarServices() {
@@ -306,129 +277,38 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
   }
 
   getConfig() {
-    const tn = this.getTaskNotes();
-    const s = (tn && tn.settings) || {};
-    const fields = Object.assign({}, DEFAULT_FIELDS, s.fieldMapping || {});
-    const statuses = (s.customStatuses && s.customStatuses.length) ? s.customStatuses : DEFAULT_STATUSES;
-    const priorities = (s.customPriorities && s.customPriorities.length) ? s.customPriorities : DEFAULT_PRIORITIES;
-    const statusMap = {}; statuses.forEach((x) => { statusMap[x.value] = x; });
-    const prioMap = {}; priorities.forEach((x) => { prioMap[x.value] = x; });
-    const doneStatus = (statuses.find((x) => x.isCompleted) || { value: 'done' }).value;
-    return {
-      taskTag: (s.taskTag || 'task').replace(/^#/, ''),
-      tasksFolder: s.tasksFolder || 'TaskNotes/Tasks',
-      defaultStatus: s.defaultTaskStatus || 'open',
-      fields, statusMap, prioMap, doneStatus,
-    };
+    return this.adapter.getConfig();
   }
 
-  getTasks(cfg) {
-    const key = JSON.stringify([cfg.fields, cfg.taskTag, cfg.defaultStatus, cfg.statusMap]);
+  async getTasks(cfg) {
+    const compat = this.adapter.getCompatibility();
+    if (!compat.ok) {
+      this._taskSnapshot = null;
+      return [];
+    }
+    const key = JSON.stringify([
+      cfg.defaultStatus,
+      cfg.doneStatus,
+      Object.keys(cfg.statusMap || {}).sort(),
+      cfg.taskTag,
+    ]);
     if (this._taskSnapshot && this._taskSnapshot.key === key) return this._taskSnapshot.tasks;
+
+    const infos = await this.adapter.listTasks({ scope: { includeArchived: false } });
     const out = [];
-    for (const f of this.app.vault.getMarkdownFiles()) {
-      const cache = this.app.metadataCache.getFileCache(f);
-      if (!cache) continue;
-      const fm = cache.frontmatter || {};
-      const tags = collectTags(fm, cache);
-      if (!tags.has(cfg.taskTag)) continue;
-      const F = cfg.fields;
-      if (fm[F.archiveTag]) continue;
-      const status = fm[F.status] || cfg.defaultStatus;
-      out.push({
-        file: f,
-        title: fm[F.title] != null ? String(fm[F.title]) : f.basename,
-        status,
-        priority: fm[F.priority] || 'none',
-        due: normDate(fm[F.due]),
-        scheduled: normDate(fm[F.scheduled]),
-        projects: linkNames(fm[F.projects]),
-        tags: orderTags(tags, cfg.taskTag),
-        done: !!(cfg.statusMap[status] && cfg.statusMap[status].isCompleted),
-      });
+    for (const info of infos) {
+      if (info && info.archived) continue;
+      const mapped = mapTaskInfo(info, cfg, (path) => this.app.vault.getAbstractFileByPath(path));
+      if (mapped) out.push(mapped);
     }
     this._taskSnapshot = { key, tasks: out };
     return out;
   }
 
   getCalendarEvents() {
-    const tn = this.getTaskNotes();
-    if (!tn) return [];
     // TaskNotes may finish booting after us — keep trying to attach listeners.
     this.subscribeCalendarServices();
-
-    const out = [];
-    const seen = new Set();
-    const push = (list, resolveMeta) => {
-      for (const ev of list || []) {
-        if (!ev) continue;
-        const id = ev.id || `${ev.subscriptionId || 'cal'}:${ev.start || ''}:${ev.title || ''}`;
-        if (!id || seen.has(id)) continue;
-        let meta;
-        try { meta = resolveMeta(ev); } catch (e) { continue; }
-        if (!meta) continue;
-        seen.add(id);
-        out.push(Object.assign({}, ev, meta, { isEvent: true, id }));
-      }
-    };
-
-    const ics = tn.icsSubscriptionService;
-    if (ics && typeof ics.getAllEvents === 'function') {
-      try {
-        const subs = new Map();
-        if (typeof ics.getSubscriptions === 'function') {
-          for (const s of ics.getSubscriptions() || []) {
-            if (s && s.id) subs.set(s.id, s);
-          }
-        }
-        push(ics.getAllEvents(), (ev) => {
-          const sub = subs.get(ev.subscriptionId);
-          if (sub && sub.enabled === false) return null;
-          return {
-            calendarName: (sub && sub.name) || 'Calendar',
-            color: ev.color || (sub && sub.color) || '#7aa2f7',
-          };
-        });
-      } catch (e) { /* never break the agenda */ }
-    }
-
-    const google = tn.googleCalendarService;
-    if (google && typeof google.getAllEvents === 'function') {
-      try {
-        const calendars = typeof google.getAvailableCalendars === 'function'
-          ? google.getAvailableCalendars()
-          : [];
-        push(google.getAllEvents(), (ev) => {
-          const calId = String(ev.subscriptionId || '').replace(/^google-/, '');
-          const cal = findProviderCalendar(calendars, calId);
-          if (!calendarIsEnabled(cal)) return null;
-          return {
-            calendarName: calendarLabel(cal, 'Google Calendar'),
-            color: ev.color || calendarColor(cal, GOOGLE_DEFAULT_COLOR),
-          };
-        });
-      } catch (e) { /* never break the agenda */ }
-    }
-
-    const ms = tn.microsoftCalendarService;
-    if (ms && typeof ms.getAllEvents === 'function') {
-      try {
-        const calendars = typeof ms.getAvailableCalendars === 'function'
-          ? ms.getAvailableCalendars()
-          : [];
-        push(ms.getAllEvents(), (ev) => {
-          const calId = String(ev.subscriptionId || '').replace(/^microsoft-/, '');
-          const cal = findProviderCalendar(calendars, calId);
-          if (!calendarIsEnabled(cal)) return null;
-          return {
-            calendarName: calendarLabel(cal, 'Microsoft Calendar'),
-            color: ev.color || calendarColor(cal, MICROSOFT_DEFAULT_COLOR),
-          };
-        });
-      } catch (e) { /* never break the agenda */ }
-    }
-
-    return out;
+    return this.adapter.listCalendarEvents();
   }
 
   // Events for a day key map, optionally dropping ones that already ended today.
@@ -467,8 +347,6 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
 
   openEventMenu(ev, mouseEvent) {
     const menu = new Menu();
-    const tn = this.getTaskNotes();
-    const noteSvc = tn && tn.icsNoteService;
 
     menu.addItem((item) => item
       .setTitle('Show details')
@@ -481,15 +359,11 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
       .setTitle('Create task from event')
       .setIcon('check-circle')
       .onClick(async () => {
-        if (!noteSvc || typeof noteSvc.createTaskFromICS !== 'function') {
-          new Notice('TaskNotes calendar integration is not available.');
-          return;
-        }
         try {
-          await noteSvc.createTaskFromICS(ev);
+          await this.adapter.createTaskFromEvent(ev);
           new Notice(`Task created: ${ev.title}`);
         } catch (e) {
-          new Notice('Could not create task from event.');
+          new Notice(e && e.message ? e.message : 'Could not create task from event.');
         }
       }));
 
@@ -497,15 +371,11 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
       .setTitle('Create note from event')
       .setIcon('file-plus')
       .onClick(async () => {
-        if (!noteSvc || typeof noteSvc.createNoteFromICS !== 'function') {
-          new Notice('TaskNotes calendar integration is not available.');
-          return;
-        }
         try {
-          await noteSvc.createNoteFromICS(ev);
+          await this.adapter.createNoteFromEvent(ev);
           new Notice(`Note created: ${ev.title}`);
         } catch (e) {
-          new Notice('Could not create note from event.');
+          new Notice(e && e.message ? e.message : 'Could not create note from event.');
         }
       }));
 
@@ -537,36 +407,28 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
   }
 
   async toggleStatus(task, cfg) {
-    const F = cfg.fields;
-    const nowDone = !task.done;
-    if (this._statusUpdates.has(task.file)) return;
-    this._statusUpdates.add(task.file);
-    let record = null;
+    const path = task.path || (task.file && task.file.path);
+    if (!path || this._statusUpdates.has(path)) return;
+    this._statusUpdates.add(path);
     try {
-      await this.app.fileManager.processFrontMatter(task.file, (fm) => {
-        const currentStatus = fm[F.status] || cfg.defaultStatus;
-        const currentDone = !!(cfg.statusMap[currentStatus] && cfg.statusMap[currentStatus].isCompleted);
-        if (currentDone === nowDone) return;
-        record = {
-          file: task.file, fields: { ...F }, title: task.title,
-          before: [F.status, F.completedDate].map((key) => ({
-            key, present: Object.prototype.hasOwnProperty.call(fm, key), value: fm[key],
-          })),
-          status: nowDone ? cfg.doneStatus : cfg.defaultStatus,
-          completedDate: nowDone ? moment().format('YYYY-MM-DD') : undefined,
+      if (!task.done) {
+        const previousStatus = task.status || cfg.defaultStatus;
+        await this.adapter.complete(path);
+        const record = {
+          file: task.file,
+          path,
+          title: task.title,
+          previousStatus,
+          completedStatus: cfg.doneStatus,
         };
-        fm[F.status] = record.status;
-        if (nowDone) fm[F.completedDate] = record.completedDate;
-        else delete fm[F.completedDate];
-        fm[F.dateModified] = moment().format();
-      });
-      if (record) {
-        const previous = this._completionUndos.get(task.file);
+        const previous = this._completionUndos.get(path);
         if (previous) this.dismissCompletionUndo(previous);
-        if (nowDone && !this._unloading) this.showCompletionUndo(record);
+        if (!this._unloading) this.showCompletionUndo(record);
+      } else {
+        await this.adapter.uncomplete(path, { status: cfg.defaultStatus });
       }
     } finally {
-      this._statusUpdates.delete(task.file);
+      this._statusUpdates.delete(path);
     }
   }
 
@@ -575,11 +437,11 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     const content = document.createElement('span');
     content.className = 'fw-agenda-undo';
     const label = document.createElement('span');
-    label.textContent = `Concluída: ${record.title}`;
+    label.textContent = `Completed: ${record.title}`;
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = 'Desfazer';
-    button.setAttribute('aria-label', `Desfazer conclusão de ${record.title}`);
+    button.textContent = 'Undo';
+    button.setAttribute('aria-label', `Undo completion of ${record.title}`);
     content.append(label, button);
     fragment.append(content);
     record.expiresAt = Date.now() + COMPLETION_UNDO_MS;
@@ -590,7 +452,7 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
       void this.undoCompletion(record);
     };
     button.addEventListener('click', record.onClick);
-    this._completionUndos.set(record.file, record);
+    this._completionUndos.set(record.path, record);
     record.notice = new Notice(fragment, 0);
     record.timer = window.setTimeout(() => this.dismissCompletionUndo(record), COMPLETION_UNDO_MS);
   }
@@ -599,91 +461,40 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     window.clearTimeout(record.timer);
     if (record.button) record.button.removeEventListener('click', record.onClick);
     if (record.notice) record.notice.hide();
-    if (this._completionUndos.get(record.file) === record) this._completionUndos.delete(record.file);
+    if (this._completionUndos.get(record.path) === record) this._completionUndos.delete(record.path);
   }
 
   async undoCompletion(record) {
-    if (this._completionUndos.get(record.file) !== record || record.busy || this._statusUpdates.has(record.file)) return false;
+    if (this._completionUndos.get(record.path) !== record || record.busy || this._statusUpdates.has(record.path)) return false;
     if (Date.now() >= record.expiresAt) { this.dismissCompletionUndo(record); return false; }
     record.busy = true;
     record.button.disabled = true;
-    this._statusUpdates.add(record.file);
-    let restored = false;
+    this._statusUpdates.add(record.path);
     try {
-      await this.app.fileManager.processFrontMatter(record.file, (fm) => {
-        const F = record.fields;
-        // Restore only our own completion, without overwriting later status edits.
-        if (fm[F.status] !== record.status || fm[F.completedDate] !== record.completedDate) return;
-        for (const field of record.before) {
-          if (field.present) fm[field.key] = field.value;
-          else delete fm[field.key];
-        }
-        fm[F.dateModified] = moment().format();
-        restored = true;
-      });
+      await this.adapter.uncomplete(record.path, { status: record.previousStatus });
       this.dismissCompletionUndo(record);
-      if (!restored) new Notice('A tarefa foi alterada depois da conclusão. Nada foi desfeito.');
       this.refreshAll();
-      return restored;
+      return true;
     } catch (error) {
       console.error('[tasknotes-timeline-wrapper] Undo completion failed', error);
-      new Notice('Não foi possível desfazer a conclusão.');
+      new Notice('Could not undo completion.');
       return false;
     } finally {
       record.busy = false;
       record.button.disabled = false;
-      this._statusUpdates.delete(record.file);
+      this._statusUpdates.delete(record.path);
     }
   }
 
-  // Hand off to TaskNotes' own creation modal (full field editor + NLP parsing),
-  // seeded with whatever was already typed. Returns false if TaskNotes isn't loaded.
+  // Hand off to TaskNotes' own creation modal (full field editor + NLP parsing).
   openNativeCreator(rawTitle) {
-    const tn = this.getTaskNotes();
     const text = (rawTitle || '').trim();
-    if (!tn || typeof tn.openTaskCreationModal !== 'function') {
-      if (this.app.commands.executeCommandById('tasknotes:create-new-task')) return true;
-      new Notice('TaskNotes is not available.');
-      return false;
-    }
-    // With natural-language input on, the modal's primary field is the NL editor and
-    // TaskNotes skips parsing it whenever a title is already set — so seed the editor
-    // instead of prePopulatedValues.title, or "tomorrow at 3pm" would never parse.
-    const nlp = !!(tn.settings && tn.settings.enableNaturalLanguageInput);
-    tn.openTaskCreationModal(!nlp && text ? { title: text } : {});
-    if (nlp && text) this.seedNativeCreator(text);
-    return true;
-  }
-
-  // The modal builds its editor asynchronously, so poll briefly for it.
-  seedNativeCreator(text, tries = 0) {
-    const host = document.querySelector('.tn-task-modal__markdown-editor--nlp, .nl-input-container');
-    const cm = host && host.querySelector('.cm-content');
-    const plain = host && host.querySelector('input, textarea');
-    if (!cm && !plain) {
-      if (tries < 40) window.setTimeout(() => this.seedNativeCreator(text, tries + 1), 25);
-      return;
-    }
-    if (plain && !cm) {
-      plain.value = text;
-      plain.dispatchEvent(new Event('input', { bubbles: true }));
-      plain.focus();
-      return;
-    }
-    // Preferred path: drive CodeMirror directly so its own change pipeline runs.
-    const view = cm.cmView && cm.cmView.view;
-    if (view && view.dispatch) {
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: text },
-        selection: { anchor: text.length },
-      });
-      view.focus();
-      return;
-    }
-    // Fallback: type it in for real, which CodeMirror picks up via beforeinput.
-    cm.focus();
-    document.execCommand('selectAll', false, null);
-    document.execCommand('insertText', false, text);
+    const cfg = this.getConfig();
+    const prefill = (!cfg.enableNaturalLanguageInput && text) ? { title: text } : {};
+    if (this.adapter.openCreateModal(prefill)) return true;
+    if (this.app.commands.executeCommandById('tasknotes:create-new-task')) return true;
+    new Notice('TaskNotes is not available.');
+    return false;
   }
 
   // Click routing for task titles. A mod-click keeps Obsidian's native meaning
@@ -703,24 +514,13 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     ws.getLeaf('tab').openFile(file);
   }
 
-  // Prefer TaskNotes' cached TaskInfo so the edit modal gets the full record.
   async resolveTaskInfo(task) {
-    const path = task.file && task.file.path;
+    const path = task.path || (task.file && task.file.path);
     if (!path) return null;
-    const tn = this.getTaskNotes();
-    const cache = tn && tn.cacheManager;
-    if (cache) {
-      try {
-        if (typeof cache.getCachedTaskInfoSync === 'function') {
-          const sync = cache.getCachedTaskInfoSync(path);
-          if (sync) return sync;
-        }
-        if (typeof cache.getTaskInfo === 'function') {
-          const asyncInfo = await cache.getTaskInfo(path);
-          if (asyncInfo) return asyncInfo;
-        }
-      } catch (e) { /* fall through to local shape */ }
-    }
+    try {
+      const info = await this.adapter.getTask(path);
+      if (info) return info;
+    } catch (e) { /* fall through to local shape */ }
     return {
       title: task.title,
       status: task.status,
@@ -735,25 +535,26 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
   }
 
   async openTaskDetails(task) {
-    const tn = this.getTaskNotes();
-    if (!tn || typeof tn.openTaskEditModal !== 'function') {
-      // Fallback: open the note if TaskNotes edit modal isn't available.
-      this.openTask(task.file, null, false);
-      return;
-    }
     const info = await this.resolveTaskInfo(task);
     if (!info) {
       new Notice('Could not open task details.');
       return;
     }
     try {
-      await tn.openTaskEditModal(info, () => this.refreshAll());
+      const opened = await this.adapter.openEditModal(info, () => this.refreshAll());
+      if (!opened) this.openTask(task.file, null, false);
     } catch (e) {
       new Notice('Could not open task details.');
     }
   }
 
   openTaskMenu(task, mouseEvent) {
+    const path = task.path || (task.file && task.file.path);
+    const onUpdate = () => this.refreshAll();
+    if (path && this.adapter.showTaskMenu({ taskPath: path, event: mouseEvent, onUpdate })) {
+      return;
+    }
+
     const menu = new Menu();
 
     menu.addItem((item) => item
@@ -790,27 +591,21 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     else menu.showAtPosition({ x: 0, y: 0 });
   }
 
+  openStatusMenu(task, mouseEvent) {
+    const path = task.path || (task.file && task.file.path);
+    if (!path) return;
+    const onUpdate = () => this.refreshAll();
+    if (this.adapter.showTaskMenu({ taskPath: path, event: mouseEvent, onUpdate })) return;
+    this.openTaskMenu(task, mouseEvent);
+  }
+
   async createTask(rawTitle, cfg) {
     const title = (rawTitle || '').trim();
     if (!title) return;
-    const folder = cfg.tasksFolder;
-    try {
-      if (!this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
-    } catch (e) { /* already exists */ }
-    const safe = title.replace(/[\\/:*?"<>|#^[\]]/g, '-').slice(0, 120).trim() || 'Untitled task';
-    let path = `${folder}/${safe}.md`, n = 1;
-    while (this.app.vault.getAbstractFileByPath(path)) path = `${folder}/${safe} ${++n}.md`;
-    const F = cfg.fields;
-    const now = moment().format();
-    const body = [
-      '---', 'tags:', `  - ${cfg.taskTag}`,
-      `${F.title}: ${JSON.stringify(title)}`,
-      `${F.status}: ${cfg.defaultStatus}`,
-      `${F.dateCreated}: ${now}`,
-      `${F.dateModified}: ${now}`,
-      '---', '',
-    ].join('\n');
-    await this.app.vault.create(path, body);
+    await this.adapter.createTask({
+      title,
+      status: cfg.defaultStatus,
+    });
     new Notice(`Task created: ${title}`);
   }
 };
@@ -832,22 +627,8 @@ class AgendaEventInfoModal extends Modal {
     this.contentEl.empty();
   }
 
-  noteSvc() {
-    const tn = this.plugin.getTaskNotes();
-    return tn && tn.icsNoteService ? tn.icsNoteService : null;
-  }
-
   async loadRelatedNotes() {
-    const svc = this.noteSvc();
-    if (!svc || typeof svc.findRelatedNotes !== 'function') {
-      this.relatedNotes = [];
-      return;
-    }
-    try {
-      this.relatedNotes = (await svc.findRelatedNotes(this.ev)) || [];
-    } catch (e) {
-      this.relatedNotes = [];
-    }
+    this.relatedNotes = await this.plugin.adapter.findRelatedNotes(this.ev);
   }
 
   async renderContent() {
@@ -855,6 +636,7 @@ class AgendaEventInfoModal extends Modal {
     contentEl.empty();
     contentEl.addClass('fw-event-info-modal');
     const ev = this.ev;
+    const adapter = this.plugin.adapter;
 
     await this.loadRelatedNotes();
 
@@ -897,8 +679,7 @@ class AgendaEventInfoModal extends Modal {
       link.setAttribute('rel', 'noopener');
     }
 
-    const svc = this.noteSvc();
-    if (svc && typeof svc.findRelatedNotes === 'function') {
+    if (adapter.canFindRelatedNotes()) {
       new Setting(contentEl).setName('Related notes').setHeading();
       if (!this.relatedNotes.length) {
         new Setting(contentEl).setDesc('No related notes or tasks.');
@@ -932,12 +713,8 @@ class AgendaEventInfoModal extends Modal {
       .addButton((btn) => btn
         .setButtonText('Create note')
         .onClick(async () => {
-          if (!svc || typeof svc.createNoteFromICS !== 'function') {
-            new Notice('TaskNotes calendar integration is not available.');
-            return;
-          }
           try {
-            const result = await svc.createNoteFromICS(ev);
+            const result = await adapter.createNoteFromEvent(ev);
             new Notice(`Note created: ${ev.title}`);
             if (result && result.file) {
               await this.app.workspace.getLeaf(false).openFile(result.file);
@@ -946,19 +723,15 @@ class AgendaEventInfoModal extends Modal {
               await this.renderContent();
             }
           } catch (e) {
-            new Notice('Could not create note from event.');
+            new Notice(e && e.message ? e.message : 'Could not create note from event.');
           }
         }))
       .addButton((btn) => btn
         .setButtonText('Create task')
         .setCta()
         .onClick(async () => {
-          if (!svc || typeof svc.createTaskFromICS !== 'function') {
-            new Notice('TaskNotes calendar integration is not available.');
-            return;
-          }
           try {
-            const result = await svc.createTaskFromICS(ev);
+            const result = await adapter.createTaskFromEvent(ev);
             const title = (result && result.taskInfo && result.taskInfo.title) || ev.title;
             new Notice(`Task created: ${title}`);
             if (result && result.file) {
@@ -968,11 +741,11 @@ class AgendaEventInfoModal extends Modal {
               await this.renderContent();
             }
           } catch (e) {
-            new Notice('Could not create task from event.');
+            new Notice(e && e.message ? e.message : 'Could not create task from event.');
           }
         }));
 
-    if (svc && typeof svc.findRelatedNotes === 'function') {
+    if (adapter.canFindRelatedNotes()) {
       new Setting(contentEl)
         .setName('Refresh')
         .setDesc('Reload related notes for this event.')
@@ -1074,8 +847,30 @@ class AgendaController {
   async render() {
     if (this.disposed) return;
     const renderId = (this._renderId = (this._renderId || 0) + 1);
+    const compat = this.plugin.getCompatibility();
     const cfg = this.plugin.getConfig();
-    let active = this.plugin.getTasks(cfg).filter((t) => !t.done);
+
+    if (!compat.ok) {
+      const el = this.containerEl;
+      el.empty();
+      const density = this.plugin.settings.density === 'compact' ? 'compact' : 'comfortable';
+      const root = el.createDiv({ cls: `fw-agenda fw-agenda--${density}` });
+      this.timeIndicators = [];
+      const error = root.createDiv({ cls: 'fw-agenda__filter-error', attr: { role: 'alert' } });
+      error.createDiv({ text: compat.message || 'TaskNotes Runtime API is unavailable.' });
+      const retry = error.createEl('button', {
+        text: 'Retry', attr: { type: 'button', 'data-fw-focus': 'retry-compat' },
+      });
+      retry.addEventListener('click', () => {
+        this.plugin.subscribeTaskNotesLifecycle();
+        this.plugin.subscribeCalendarServices();
+        this.plugin.refreshAll();
+      });
+      return;
+    }
+
+    let active = (await this.plugin.getTasks(cfg)).filter((t) => !t.done);
+    if (this.disposed || renderId !== this._renderId) return;
 
     const viewFilter = await this.plugin.getViewTaskPathSet(this.opts);
     if (this.disposed || renderId !== this._renderId || viewFilter.status === 'stale') return;
@@ -1363,7 +1158,12 @@ class AgendaController {
       cls: 'fw-task__status', attr: { type: 'button', 'data-fw-focus': `status-${task.file.path}` },
     });
     statusEl.style.borderColor = statusColor;
-    statusEl.setAttribute('aria-label', `Mark ${task.title} ${task.done ? 'incomplete' : 'complete'}`);
+    statusEl.setAttribute(
+      'aria-label',
+      task.done
+        ? `Reopen ${task.title}. Right-click for more status options.`
+        : `Complete ${task.title}. Right-click for more status options.`,
+    );
     statusEl.disabled = this.pendingStatus.has(task.file.path);
     statusEl.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -1379,6 +1179,11 @@ class AgendaController {
         this.pendingStatus.delete(task.file.path);
         this.plugin.refreshAll();
       }
+    });
+    statusEl.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.plugin.openStatusMenu(task, e);
     });
     if (this.plugin.settings.showPriority !== false && task.priority && task.priority !== 'none') {
       dots.createDiv({ cls: 'fw-task__priority' }).style.background = prioColor;
