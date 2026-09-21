@@ -1,0 +1,10 @@
+{
+  "id": "tasknotes-timeline-wrapper",
+  "name": "TaskNotes Timeline Wrapper",
+  "version": "1.3.0",
+  "minAppVersion": "1.4.0",
+  "description": "A Today's Timeline window for TaskNotes — stats, date-grouped tasks, optional calendar events (ICS / Google / Microsoft), and quick task entry, for a sidebar pane or embedded in a note.",
+  "author": "Grmglib.",
+  "authorUrl": "https://github.com/Grmglib",
+  "isDesktopOnly": false
+}
