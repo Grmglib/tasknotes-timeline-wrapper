@@ -119,3 +119,7 @@ npm run dev     # development bundle with inline sourcemap
 ## License
 
 [MIT](LICENSE)
+
+
+<img width="1280" height="764" alt="Screenshot_2" src="https://github.com/user-attachments/assets/5bed14a7-0cdf-4954-acd6-31c9fe8f611b" />
+
