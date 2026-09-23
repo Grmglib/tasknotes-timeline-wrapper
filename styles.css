@@ -54,6 +54,48 @@
   overflow-wrap: anywhere;
 }
 .fw-agenda__filter-error button { margin-top: 8px; }
+.fw-agenda__state {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+  text-align: center;
+}
+.fw-agenda__state--error { border-color: var(--color-red, #cc5a5a); }
+.fw-agenda__state-title { font-weight: 600; }
+.fw-agenda__state-detail {
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.fw-agenda__state button { margin-top: 10px; }
+.fw-agenda__skeleton { margin-top: 14px; text-align: left; }
+.fw-agenda__skeleton-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 4px; }
+.fw-agenda__skeleton-dot,
+.fw-agenda__skeleton-title,
+.fw-agenda__skeleton-meta {
+  display: block;
+  border-radius: 6px;
+  background: var(--background-modifier-border);
+  animation: fw-agenda-pulse 1.25s ease-in-out infinite;
+}
+.fw-agenda__skeleton-dot { width: 18px; height: 18px; flex: 0 0 18px; border-radius: 50%; }
+.fw-agenda__skeleton-lines { flex: 1; }
+.fw-agenda__skeleton-title { width: 72%; height: 13px; }
+.fw-agenda__skeleton-meta { width: 42%; height: 9px; margin-top: 7px; animation-delay: 120ms; }
+@keyframes fw-agenda-pulse { 50% { opacity: 0.42; } }
+.fw-agenda__cache-status {
+  margin: 0 0 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+.fw-agenda__cache-status--stale { color: var(--text-faint); }
 
 /* light mode — also covers Forest Light picked while base mode is still dark */
 body.theme-light .fw-agenda,
@@ -160,6 +202,23 @@ body.theme-dark.forest-theme-light .fw-agenda {
 }
 .fw-stat--unplanned .fw-stat__num { color: var(--color-yellow, #e8c07d); }
 
+/* live task and calendar-event search */
+.fw-agenda__search {
+  margin: -7px 0 14px;
+}
+.fw-agenda__search-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 7px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 12px;
+}
+
 /* new-task input */
 .fw-agenda__input {
   background: var(--background-secondary);
@@ -258,6 +317,22 @@ body.theme-dark.forest-theme-light .fw-agenda {
   transition: background 120ms ease;
 }
 .fw-task:hover { background: var(--background-modifier-hover); }
+.fw-task[draggable="true"] { cursor: grab; }
+.fw-task.is-dragging { opacity: 0.4; cursor: grabbing; }
+.fw-agenda__section[data-fw-drop-day] { border-radius: 8px; transition: background 120ms ease, outline-color 120ms ease; }
+.fw-agenda__section.is-drop-target {
+  background: var(--background-modifier-hover);
+  outline: 2px dashed var(--interactive-accent);
+  outline-offset: 2px;
+}
+.fw-agenda__section.is-drop-target .fw-agenda__section-content:empty::after {
+  display: block;
+  padding: 8px 10px;
+  color: var(--text-muted);
+  content: 'Drop task here';
+  font-size: 12px;
+  text-align: center;
+}
 .fw-task__body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
 .fw-task__dots {
@@ -298,6 +373,51 @@ body.theme-dark.forest-theme-light .fw-agenda {
 }
 .fw-task__title:hover { color: var(--text-accent); text-decoration: underline; }
 .fw-task__title-row { display: flex; align-items: flex-start; gap: 5px; }
+.fw-task--completed .fw-task__title { color: var(--text-muted); }
+.fw-agenda button.fw-task__edit-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  margin: -2px 0 0 auto;
+  padding: 3px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease, visibility 120ms ease;
+}
+.fw-task:hover .fw-task__edit-toggle,
+.fw-task:focus-within .fw-task__edit-toggle,
+.fw-task__edit-toggle:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+}
+.fw-task__edit-toggle:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.fw-task__edit-toggle svg { width: 14px; height: 14px; }
+.fw-task__quick-edit[hidden] { display: none !important; }
+.fw-task__quick-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  margin-top: 9px;
+  padding: 9px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+.fw-task__quick-edit-field { display: flex; flex-direction: column; gap: 4px; min-width: 100px; }
+.fw-task__quick-edit-field label { color: var(--text-muted); font-size: 11px; }
+.fw-task__quick-edit-field input,
+.fw-task__quick-edit-field select { max-width: 180px; min-height: 28px; font-size: 12px; }
 .fw-task__overdue {
   display: inline-flex;
   flex-shrink: 0;
@@ -405,4 +525,13 @@ body.theme-dark.forest-theme-light .fw-agenda {
 @media (prefers-reduced-motion: reduce) {
   .fw-agenda *, .fw-agenda *::before, .fw-agenda *::after { transition: none; }
   .fw-stat:hover { transform: none; }
+  .fw-agenda__skeleton-dot, .fw-agenda__skeleton-title, .fw-agenda__skeleton-meta { animation: none; }
+}
+
+@media (hover: none) {
+  .fw-agenda button.fw-task__edit-toggle {
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+  }
 }

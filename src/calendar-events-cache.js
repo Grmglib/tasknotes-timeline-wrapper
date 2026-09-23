@@ -5,6 +5,7 @@ const { debounce } = require('./utils');
 const CACHE_VERSION = 1;
 const CACHE_FILENAME = 'calendar-events-cache.json';
 const DEFAULT_SAVE_DEBOUNCE_MS = 1000;
+const DEFAULT_MAX_CACHE_AGE_MS = 24 * 60 * 60 * 1000;
 
 function cacheFilePath(manifestDir) {
   const base = String(manifestDir || '').replace(/[/\\]+$/, '');
@@ -19,18 +20,27 @@ function buildCachePayload(events, updatedAt) {
   };
 }
 
-function parseCachePayload(raw) {
-  if (raw == null || raw === '') return [];
+function parseCacheSnapshot(raw) {
+  if (raw == null || raw === '') return { events: [], updatedAt: null };
   let data = raw;
   if (typeof raw === 'string') {
     try {
       data = JSON.parse(raw);
     } catch (e) {
-      return [];
+      return { events: [], updatedAt: null };
     }
   }
-  if (!data || typeof data !== 'object' || !Array.isArray(data.events)) return [];
-  return data.events.filter((ev) => ev && typeof ev === 'object');
+  if (!data || typeof data !== 'object' || !Array.isArray(data.events)) {
+    return { events: [], updatedAt: null };
+  }
+  return {
+    events: data.events.filter((ev) => ev && typeof ev === 'object'),
+    updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : null,
+  };
+}
+
+function parseCachePayload(raw) {
+  return parseCacheSnapshot(raw).events;
 }
 
 /**
@@ -39,16 +49,36 @@ function parseCachePayload(raw) {
  * - Live empty after sync observed → show [] and clear cache.
  * - Live empty before sync → show cached events (startup / offline).
  */
-function resolveCalendarEvents({ live, cache, syncObserved }) {
+function resolveCalendarEvents({
+  live,
+  cache,
+  cacheUpdatedAt,
+  syncObserved,
+  now = Date.now(),
+  maxCacheAgeMs = DEFAULT_MAX_CACHE_AGE_MS,
+}) {
   const liveEvents = Array.isArray(live) ? live : [];
   if (liveEvents.length > 0) {
-    return { events: liveEvents, shouldPersist: true, persistEvents: liveEvents };
+    return { events: liveEvents, shouldPersist: true, persistEvents: liveEvents, source: 'live', stale: false };
   }
   if (syncObserved) {
-    return { events: [], shouldPersist: true, persistEvents: [] };
+    return { events: [], shouldPersist: true, persistEvents: [], source: 'empty', stale: false };
   }
   const cached = Array.isArray(cache) ? cache : [];
-  return { events: cached, shouldPersist: false, persistEvents: null };
+  const updatedMs = cacheUpdatedAt ? Date.parse(cacheUpdatedAt) : NaN;
+  const hasFreshTimestamp = Number.isFinite(updatedMs)
+    && now >= updatedMs
+    && now - updatedMs <= maxCacheAgeMs;
+  if (cached.length && hasFreshTimestamp) {
+    return { events: cached, shouldPersist: false, persistEvents: null, source: 'cache', stale: false };
+  }
+  return {
+    events: [],
+    shouldPersist: false,
+    persistEvents: null,
+    source: 'empty',
+    stale: cached.length > 0,
+  };
 }
 
 function createAdapterIO(adapter, manifestDir) {
@@ -79,12 +109,17 @@ function createCalendarEventsCache(options = {}) {
   } = options;
 
   async function load() {
-    if (typeof readText !== 'function') return [];
+    const snapshot = await loadSnapshot();
+    return snapshot.events;
+  }
+
+  async function loadSnapshot() {
+    if (typeof readText !== 'function') return { events: [], updatedAt: null };
     try {
       const raw = await readText();
-      return parseCachePayload(raw);
+      return parseCacheSnapshot(raw);
     } catch (e) {
-      return [];
+      return { events: [], updatedAt: null };
     }
   }
 
@@ -100,6 +135,7 @@ function createCalendarEventsCache(options = {}) {
 
   return {
     load,
+    loadSnapshot,
     save,
     scheduleSave,
     cancelScheduledSave: scheduleSave.cancel,
@@ -110,9 +146,11 @@ module.exports = {
   CACHE_VERSION,
   CACHE_FILENAME,
   DEFAULT_SAVE_DEBOUNCE_MS,
+  DEFAULT_MAX_CACHE_AGE_MS,
   cacheFilePath,
   buildCachePayload,
   parseCachePayload,
+  parseCacheSnapshot,
   resolveCalendarEvents,
   createAdapterIO,
   createCalendarEventsCache,

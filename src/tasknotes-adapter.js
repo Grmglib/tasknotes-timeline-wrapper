@@ -182,6 +182,33 @@ function createTaskNotesAdapter(app) {
     return api.tasks.setStatus(path, status, mutationContext(context));
   }
 
+  async function updateTask(path, patch, context) {
+    const compat = getCompatibility();
+    if (!compat.ok) throw new Error(compat.message);
+    const api = getApi();
+    if (!api.tasks) throw new Error('TaskNotes api.tasks is unavailable.');
+    const mutation = mutationContext(context || { reason: 'timeline quick edit' });
+    if (typeof api.tasks.update === 'function') {
+      return api.tasks.update(path, patch, mutation);
+    }
+
+    // Keep compatibility with Runtime API v1 builds that expose field helpers
+    // before the generic update method.
+    const changes = Object.entries(patch || {});
+    for (const [field, value] of changes) {
+      let method;
+      if (field === 'priority') method = value == null ? null : api.tasks.setPriority;
+      else if (field === 'due') method = value == null ? api.tasks.clearDue : api.tasks.setDue;
+      else if (field === 'scheduled') method = value == null ? api.tasks.clearScheduled : api.tasks.setScheduled;
+      if (typeof method !== 'function') {
+        throw new Error(`TaskNotes cannot update task field: ${field}`);
+      }
+      if (value == null) await method.call(api.tasks, path, mutation);
+      else await method.call(api.tasks, path, value, mutation);
+    }
+    return api.tasks.get ? api.tasks.get(path) : null;
+  }
+
   function showTaskMenu(opts) {
     const api = getApi();
     if (!hasCapability('ui.task-menu') || !api || !api.ui || !api.ui.taskMenu) return false;
@@ -398,6 +425,7 @@ function createTaskNotesAdapter(app) {
     complete,
     uncomplete,
     setStatus,
+    updateTask,
     showTaskMenu,
     populateTaskMenu,
     subscribeLifecycle,

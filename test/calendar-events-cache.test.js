@@ -8,6 +8,7 @@ const {
   cacheFilePath,
   buildCachePayload,
   parseCachePayload,
+  parseCacheSnapshot,
   resolveCalendarEvents,
   createCalendarEventsCache,
 } = require('../src/calendar-events-cache');
@@ -39,6 +40,13 @@ describe('calendar-events-cache paths and payload', () => {
     assert.deepEqual(parseCachePayload({ events: 'nope' }), []);
     assert.deepEqual(parseCachePayload({ events: [null, { id: 'ok' }, 3] }), [{ id: 'ok' }]);
   });
+
+  it('parseCacheSnapshot preserves cache freshness metadata', () => {
+    const updatedAt = '2026-09-21T12:00:00.000Z';
+    const events = [{ id: 'a' }];
+    assert.deepEqual(parseCacheSnapshot({ updatedAt, events }), { updatedAt, events });
+    assert.deepEqual(parseCacheSnapshot(null), { updatedAt: null, events: [] });
+  });
 });
 
 describe('resolveCalendarEvents', () => {
@@ -61,14 +69,31 @@ describe('resolveCalendarEvents', () => {
   });
 
   it('falls back to cache before sync is observed', () => {
+    const now = Date.parse('2026-09-21T18:00:00.000Z');
     const resolved = resolveCalendarEvents({
       live: [],
       cache: cached,
+      cacheUpdatedAt: '2026-09-21T12:00:00.000Z',
       syncObserved: false,
+      now,
     });
     assert.deepEqual(resolved.events, cached);
     assert.equal(resolved.shouldPersist, false);
     assert.equal(resolved.persistEvents, null);
+    assert.equal(resolved.source, 'cache');
+  });
+
+  it('does not show an expired cache before sync is observed', () => {
+    const resolved = resolveCalendarEvents({
+      live: [],
+      cache: cached,
+      cacheUpdatedAt: '2026-09-19T12:00:00.000Z',
+      syncObserved: false,
+      now: Date.parse('2026-09-21T18:00:00.000Z'),
+    });
+    assert.deepEqual(resolved.events, []);
+    assert.equal(resolved.source, 'empty');
+    assert.equal(resolved.stale, true);
   });
 
   it('clears cache after sync observes empty live data', () => {
@@ -96,12 +121,14 @@ describe('resolveCalendarEvents', () => {
 describe('createCalendarEventsCache load/save', () => {
   it('loads events from injectable readText', async () => {
     const events = [{ id: '1', title: 'From disk' }];
+    const updatedAt = '2026-09-21T15:00:00.000Z';
     const store = createCalendarEventsCache({
-      readText: async () => JSON.stringify({ version: 1, events }),
+      readText: async () => JSON.stringify({ version: 1, updatedAt, events }),
       writeText: async () => {},
     });
     const loaded = await store.load();
     assert.deepEqual(loaded, events);
+    assert.deepEqual(await store.loadSnapshot(), { events, updatedAt });
   });
 
   it('returns empty array when read fails or file is missing', async () => {

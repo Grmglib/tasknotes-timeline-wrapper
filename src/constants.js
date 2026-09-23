@@ -16,6 +16,8 @@ const DEFAULT_SETTINGS = {
   showCalendarEvents: false,
   hideFinishedEventsToday: false,
   taskDays: 14,
+  showEmptyDays: true,
+  showCompletedToday: true,
   eventDays: 14,
   maxRecurringOccurrences: 3,
   tasknotesBasePath: '',

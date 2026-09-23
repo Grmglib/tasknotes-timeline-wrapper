@@ -24,6 +24,7 @@ function mapTaskInfo(info, cfg, resolveFile) {
 
   const due = normalizeTaskDate(info.due);
   const scheduled = normalizeTaskDate(info.scheduled);
+  const completedDate = normalizeTaskDate(info.completedDate);
   const projects = Array.isArray(info.projects)
     ? linkNames(info.projects)
     : linkNames(info.projects);
@@ -36,6 +37,7 @@ function mapTaskInfo(info, cfg, resolveFile) {
     priority: info.priority != null && info.priority !== '' ? String(info.priority) : 'none',
     due,
     scheduled,
+    completedDate,
     projects,
     tags: orderTags(tags, cfg.taskTag),
     done: !!(cfg.statusMap[status] && cfg.statusMap[status].isCompleted),
