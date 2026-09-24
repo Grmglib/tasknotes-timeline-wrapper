@@ -33,6 +33,7 @@
 .fw-agenda button.fw-agenda__input-advanced,
 .fw-agenda button.fw-agenda__input-enter,
 .fw-agenda button.fw-agenda__dayhead,
+.fw-agenda button.fw-task__drag-handle,
 .fw-agenda button.fw-task__status {
   appearance: none;
   background: transparent;
@@ -341,8 +342,8 @@ body.theme-dark.forest-theme-light .fw-agenda {
   transition: background 120ms ease;
 }
 .fw-task:hover { background: var(--background-modifier-hover); }
-.fw-task[draggable="true"] { cursor: grab; }
-.fw-task.is-dragging { opacity: 0.4; cursor: grabbing; }
+.fw-task.is-dragging { opacity: 0.4; }
+.fw-agenda:not(.is-dragging) .fw-agenda__section[data-fw-empty-day] { display: none; }
 .fw-agenda__section[data-fw-drop-day] { border-radius: 8px; transition: background 120ms ease, outline-color 120ms ease; }
 .fw-agenda__section.is-drop-target {
   background: var(--background-modifier-hover);
@@ -367,6 +368,26 @@ body.theme-dark.forest-theme-light .fw-agenda {
   padding-top: 2px;
   height: fit-content;
 }
+.fw-agenda button.fw-task__drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  padding: 0;
+  border-radius: 5px;
+  color: var(--text-faint);
+  cursor: grab;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease, visibility 120ms ease;
+}
+.fw-agenda button.fw-task__drag-handle:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.fw-agenda button.fw-task__drag-handle:active,
+.fw-task.is-dragging .fw-task__drag-handle { cursor: grabbing; }
+.fw-agenda button.fw-task__drag-handle svg { width: 16px; height: 16px; }
 .fw-agenda button.fw-task__status,
 .fw-agenda button.fw-task__status:focus {
   box-sizing: border-box;
@@ -420,7 +441,10 @@ body.theme-dark.forest-theme-light .fw-agenda {
 }
 .fw-task:hover .fw-task__edit-toggle,
 .fw-task:focus-within .fw-task__edit-toggle,
-.fw-task__edit-toggle:focus-visible {
+.fw-task__edit-toggle:focus-visible,
+.fw-task:hover .fw-task__drag-handle,
+.fw-task:focus-within .fw-task__drag-handle,
+.fw-task__drag-handle:focus-visible {
   opacity: 1;
   pointer-events: auto;
   visibility: visible;
@@ -554,8 +578,39 @@ body.theme-dark.forest-theme-light .fw-agenda {
   .fw-agenda__calendar-loading svg { animation: none; }
 }
 
-@media (hover: none) {
-  .fw-agenda button.fw-task__edit-toggle {
+@media (hover: none), (pointer: coarse) {
+  .fw-agenda__title-row { padding-right: 44px; padding-left: 44px; }
+
+  .fw-agenda button.fw-task__status,
+  .fw-agenda button.fw-task__drag-handle,
+  .fw-agenda button.fw-agenda__menu-toggle,
+  .fw-agenda button.fw-task__edit-toggle,
+  .fw-agenda button.fw-agenda__input-advanced,
+  .fw-agenda button.fw-agenda__input-enter {
+    box-sizing: border-box;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    flex: 0 0 44px;
+    padding: 10px;
+  }
+
+  .fw-agenda button.fw-stat,
+  .fw-agenda button.fw-agenda__dayhead { min-height: 44px; }
+
+  .fw-agenda__input-field,
+  .fw-task__quick-edit-field input,
+  .fw-task__quick-edit-field select {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .fw-task__quick-edit-field input,
+  .fw-task__quick-edit-field select { max-width: 100%; }
+
+  .fw-agenda button.fw-task__edit-toggle,
+  .fw-agenda button.fw-task__drag-handle {
     opacity: 1;
     pointer-events: auto;
     visibility: visible;

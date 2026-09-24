@@ -3,6 +3,16 @@
 const VIEW_TYPE_AGENDA = 'tasknotes-timeline-wrapper';
 const COMPLETION_UNDO_MS = 8000;
 
+const UI_STRINGS = Object.freeze({
+  loadingTasks: 'Loading tasks…',
+  settings: Object.freeze({
+    timeline: 'Timeline',
+    taskDisplay: 'Task display',
+    calendar: 'Calendar',
+    filters: 'Filters',
+  }),
+});
+
 const DEFAULT_SETTINGS = {
   metaIcons: false,
   showScheduledDate: true,
@@ -17,7 +27,6 @@ const DEFAULT_SETTINGS = {
   showCalendarEvents: false,
   hideFinishedEventsToday: false,
   taskDays: 14,
-  showEmptyDays: true,
   showCompletedToday: true,
   eventDays: 14,
   maxRecurringOccurrences: 3,
@@ -102,6 +111,7 @@ const CALENDAR_SERVICE_KEYS = [
 module.exports = {
   VIEW_TYPE_AGENDA,
   COMPLETION_UNDO_MS,
+  UI_STRINGS,
   DEFAULT_SETTINGS,
   BASES_FIELD_MAP,
   META_ICONS,

@@ -15,6 +15,7 @@ If TaskNotes is missing or the API is incompatible, the timeline shows a clear e
 
 - **Today's Timeline pane** — ribbon icon or command *Open Today's Timeline*
 - **Stat tiles** — Todo / Overdue / Unplanned; click to filter, click again to clear
+- **Search filters** — combine free text with `status:todo`, `tag:work`, and `due:today` (also `due:overdue`, `due:tomorrow`, or `due:YYYY-MM-DD`)
 - **Date-grouped list** — Unplanned, Overdue, then upcoming days (collapsible sections)
 - **Reschedule by drag and drop** — drag a task onto another day to change its scheduled date
 - **Inline quick edit** — change priority, scheduled date, and due date without opening the task modal
@@ -66,6 +67,8 @@ view: Work Context
 | `base` | Path to a TaskNotes `.base` file |
 | `view` | View name inside that base (filters combined with file-level filters) |
 
+Search filters can be combined with each other and with regular text, for example `report status:todo tag:work due:today`. `status:todo` means any incomplete task; other status values match the task's configured status. Tags match exactly, ignoring case and an optional leading `#`.
+
 ### Settings (plugin options)
 
 - Open notes in a new tab (affects note opens from the menu / middle-click paths)
@@ -115,7 +118,12 @@ npm run dev     # development bundle with inline sourcemap
 
 | Module | Role |
 |--------|------|
-| `src/main.js` | Plugin, timeline UI, settings |
+| `src/main.js` | Plugin lifecycle, TaskNotes integration, caches, and actions |
+| `src/agenda-controller.js` | Timeline state, rendering flow, search debounce, and interactions |
+| `src/agenda-model.js` | Pure search, sorting, focus, collapse, quick-edit, and render-state helpers |
+| `src/agenda-renderers.js` | Task and calendar-event rows |
+| `src/agenda-settings.js` | Plugin settings tab |
+| `src/agenda-event-modal.js` | Calendar event details modal |
 | `src/tasknotes-adapter.js` | Runtime API gate, tasks/UI/lifecycle, calendar wrappers |
 | `src/task-mapper.js` | `TaskInfo` → timeline row shape |
 | `src/bases-filters.js` | Bases → runtime `where` |
