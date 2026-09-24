@@ -149,6 +149,9 @@ describe('createTaskNotesAdapter calendar', () => {
     assert.equal(events[0].calendarName, 'ICS Cal');
     assert.equal(events[1].title, 'Google ok');
     assert.equal(events[1].isEvent, true);
+    assert.deepEqual(adapter.getCalendarReadErrors(), [
+      { source: 'Microsoft Calendar', message: 'provider boom' },
+    ]);
   });
 
   it('createTaskFromEvent requires icsNoteService and succeeds when present', async () => {

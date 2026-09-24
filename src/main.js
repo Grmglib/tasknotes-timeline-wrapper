@@ -64,8 +64,8 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     this._calendarSubscribed = new Set();
     this._calendarEventsCache = [];
     this._calendarEventsCacheUpdatedAt = null;
-    this._calendarCacheStatus = { source: 'empty', stale: false };
     this._calendarSyncObserved = false;
+    this._activeCalendarErrors = new Set();
     this._viewPathCache = new Map();
     this._taskSnapshot = null;
     this._viewFilterGen = 0;
@@ -357,13 +357,13 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     // TaskNotes may finish booting after us — keep trying to attach listeners.
     this.subscribeCalendarServices();
     const live = this.adapter.listCalendarEvents();
+    this.reportCalendarReadErrors();
     const resolved = resolveCalendarEvents({
       live,
       cache: this._calendarEventsCache,
       cacheUpdatedAt: this._calendarEventsCacheUpdatedAt,
       syncObserved: this._calendarSyncObserved,
     });
-    this._calendarCacheStatus = { source: resolved.source, stale: resolved.stale };
     if (resolved.shouldPersist) {
       this._calendarEventsCache = resolved.persistEvents;
       this._calendarEventsCacheUpdatedAt = new Date().toISOString();
@@ -372,8 +372,22 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     return resolved.events;
   }
 
-  getCalendarCacheStatus() {
-    return this._calendarCacheStatus;
+  reportCalendarReadErrors() {
+    const errors = this.adapter.getCalendarReadErrors();
+    const current = new Set();
+    for (const error of errors) {
+      const key = `${error.source}: ${error.message}`;
+      current.add(key);
+      if (this._activeCalendarErrors.has(key)) continue;
+      new Notice(`Calendar synchronization failed (${key}).`, 8000);
+    }
+    this._activeCalendarErrors = current;
+  }
+
+  isCalendarLoading() {
+    return this.hasCalendarIntegration()
+      && !this._calendarSyncObserved
+      && this._activeCalendarErrors.size === 0;
   }
 
   // Events for a day key map, optionally dropping ones that already ended today.
@@ -845,6 +859,8 @@ class AgendaController {
     this.plugin = plugin;
     this.containerEl = containerEl;
     this.opts = opts;
+    this.viewFilterOverride = null;
+    this.viewFilterOpen = false;
     this.filter = null; // null | 'todo' | 'overdue' | 'unplanned'
     this.searchQuery = '';
     this.collapsed = new Set(); // section labels the user has collapsed
@@ -952,6 +968,23 @@ class AgendaController {
     this.timeIndicators = [];
   }
 
+  currentViewFilterSource() {
+    return this.viewFilterOverride || this.plugin.resolveViewFilterSource(this.opts);
+  }
+
+  async updateViewFilter(basePath, viewName) {
+    const source = { basePath: String(basePath || '').trim(), viewName: String(viewName || '').trim() };
+    this.viewFilterOverride = source;
+    this.plugin.invalidateViewFilterCache();
+    if ((this.opts || {}).base == null && (this.opts || {}).view == null) {
+      this.plugin.settings.tasknotesBasePath = source.basePath;
+      this.plugin.settings.tasknotesViewName = source.viewName;
+      await this.plugin.saveSettings();
+    } else {
+      await this.render();
+    }
+  }
+
   formatEventTime(ev) {
     return formatEventTimeRange(ev);
   }
@@ -986,13 +1019,23 @@ class AgendaController {
     let allTasks;
     let active;
     let viewFilter;
+    let viewFilterSource;
+    let filterViews = [];
     try {
       cfg = this.plugin.getConfig();
       allTasks = await this.plugin.getTasks(cfg);
       active = allTasks.filter((t) => !t.done);
       if (this.disposed || renderId !== this._renderId) return;
-      viewFilter = await this.plugin.getViewTaskPathSet(this.opts);
+      viewFilterSource = this.currentViewFilterSource();
+      viewFilter = await this.plugin.getViewTaskPathSet({
+        base: viewFilterSource.basePath,
+        view: viewFilterSource.viewName,
+      });
       if (this.disposed || renderId !== this._renderId || viewFilter.status === 'stale') return;
+      if (this.viewFilterOpen && viewFilterSource.basePath) {
+        filterViews = await this.plugin.listViewsInBase(viewFilterSource.basePath);
+        if (this.disposed || renderId !== this._renderId) return;
+      }
     } catch (error) {
       if (this.disposed || renderId !== this._renderId) return;
       console.error('[tasknotes-timeline-wrapper] Timeline load failed', error);
@@ -1043,8 +1086,6 @@ class AgendaController {
         !!this.plugin.settings.hideFinishedEventsToday
       );
     }
-    const calendarCacheStatus = this.plugin.getCalendarCacheStatus();
-
     const eventsFor = (dayMoment) => eventBuckets.get(dayMoment.format('YYYY-MM-DD')) || [];
     const { byDay: taskBuckets, overdue, unplanned } = indexAgendaTasks(active, todayKey);
     const dayKeySet = new Set(collectAgendaDayKeys(today, taskDays, eventDays, taskBuckets, eventBuckets));
@@ -1075,7 +1116,6 @@ class AgendaController {
     this.timeIndicators = [];
     this.renderDay = todayKey;
 
-    const { basePath, viewName } = this.plugin.resolveViewFilterSource(this.opts);
     if (viewFilter.status === 'error') {
       const error = root.createDiv({ cls: 'fw-agenda__filter-error', attr: { role: 'alert' } });
       error.createDiv({ text: `Tasks unavailable: ${viewFilter.message}` });
@@ -1083,55 +1123,47 @@ class AgendaController {
         text: 'Retry filter', attr: { type: 'button', 'data-fw-focus': 'retry-filter' },
       });
       retry.addEventListener('click', () => this.plugin.refreshAll());
-    } else if (basePath && viewFilter.status === 'applied') {
-      const filterLabel = viewName
-        ? `${basePath.split('/').pop()} · ${viewName}`
-        : basePath.split('/').pop();
-      root.createDiv({
-        cls: 'fw-agenda__view-filter',
-        text: `Filtered by: ${filterLabel}`,
-      });
     }
-    if (showEvents && calendarCacheStatus.source === 'cache') {
-      root.createDiv({
-        cls: 'fw-agenda__cache-status',
-        text: 'Showing cached calendar events while live data is unavailable.',
-        attr: { role: 'status' },
-      });
-    } else if (showEvents && calendarCacheStatus.stale) {
-      root.createDiv({
-        cls: 'fw-agenda__cache-status fw-agenda__cache-status--stale',
-        text: 'Cached calendar data expired. Waiting for the next calendar sync.',
-        attr: { role: 'status' },
-      });
-    }
-
     const now = moment();
-    const dl = root.createDiv({ cls: 'fw-agenda__dateline' });
-    dl.createSpan({ text: now.format('MMMM') });
-    dl.createSpan({ cls: 'fw-sep', text: '•' });
-    dl.createSpan({ text: now.format('D') });
-    dl.createSpan({ cls: 'fw-sep', text: '•' });
-    dl.createSpan({ text: now.format('YYYY') });
+    if (this.plugin.settings.showTimelineDate !== false) {
+      const dl = root.createDiv({ cls: 'fw-agenda__dateline' });
+      dl.createSpan({ text: now.format('MMMM') });
+      dl.createSpan({ cls: 'fw-sep', text: '•' });
+      dl.createSpan({ text: now.format('D') });
+      dl.createSpan({ cls: 'fw-sep', text: '•' });
+      dl.createSpan({ text: now.format('YYYY') });
+    }
 
     const titleRow = root.createDiv({ cls: 'fw-agenda__title-row' });
     titleRow.createDiv({ cls: 'fw-agenda__title', text: this.opts.title });
-    if (featureOn) {
-      const btn = titleRow.createEl('button', {
-        cls: 'fw-agenda__events-toggle' + (this.eventsVisible ? ' is-active' : ''),
-        attr: {
-          'aria-label': this.eventsVisible ? 'Hide calendar events' : 'Show calendar events',
-          type: 'button',
-          'aria-pressed': String(this.eventsVisible),
-          'data-fw-focus': 'events',
-        },
+    if (showEvents && this.plugin.isCalendarLoading()) {
+      const loading = titleRow.createDiv({
+        cls: 'fw-agenda__calendar-loading',
+        attr: { role: 'status', 'aria-label': 'Loading calendar events', title: 'Loading calendar events' },
       });
-      setIcon(btn, 'calendar');
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.eventsVisible = !this.eventsVisible;
-        this.render();
-      });
+      setIcon(loading, 'loader-circle');
+    }
+    const filterLabel = viewFilterSource.basePath
+      ? (viewFilterSource.viewName
+        ? `${viewFilterSource.basePath.split('/').pop()} · ${viewFilterSource.viewName}`
+        : viewFilterSource.basePath.split('/').pop())
+      : '';
+    const menuTitle = filterLabel
+      ? `Filtered by: ${filterLabel}${viewFilter.status === 'error' ? ' (filter error)' : ''}`
+      : 'Timeline options';
+    const menuButton = titleRow.createEl('button', {
+      cls: 'fw-agenda__menu-toggle',
+      attr: {
+        type: 'button',
+        title: menuTitle,
+        'aria-label': menuTitle,
+        'data-fw-focus': 'timeline-menu',
+      },
+    });
+    setIcon(menuButton, 'more-horizontal');
+    menuButton.addEventListener('click', (event) => this.openTimelineMenu(event));
+    if (this.viewFilterOpen) {
+      this.renderViewFilterPanel(root, viewFilterSource, filterViews);
     }
 
     // clickable, colored stat tiles that filter the list
@@ -1350,6 +1382,65 @@ class AgendaController {
       if (this.listEl && this.listModel) this.renderAgendaList(this.listEl, this.listModel);
     });
 
+  }
+
+  openTimelineMenu(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = new Menu();
+    menu.addItem((item) => item
+      .setTitle(this.viewFilterOpen ? 'Hide filter' : 'Filter')
+      .setIcon('filter')
+      .onClick(() => {
+        this.viewFilterOpen = !this.viewFilterOpen;
+        this.render();
+      }));
+    menu.addItem((item) => item
+      .setTitle(this.eventsVisible ? 'Hide calendar events' : 'Show calendar events')
+      .setIcon(this.eventsVisible ? 'eye-off' : 'eye')
+      .onClick(() => {
+        this.eventsVisible = !this.eventsVisible;
+        this.render();
+      }));
+    menu.showAtMouseEvent(event);
+  }
+
+  renderViewFilterPanel(root, source, views) {
+    const hasBase = !!source.basePath;
+    const wrap = root.createDiv({ cls: 'fw-agenda__view-filter-wrap' });
+    const panel = wrap.createDiv({ cls: 'fw-agenda__view-filter-panel' });
+    const makeSelect = (label, value, options) => {
+      const field = panel.createDiv({ cls: 'fw-agenda__view-filter-field' });
+      field.createEl('label', { text: label });
+      const select = field.createEl('select', { attr: { 'aria-label': label } });
+      for (const option of options) {
+        select.createEl('option', { text: option.label, attr: { value: option.value } });
+      }
+      select.value = value;
+      return select;
+    };
+    const baseOptions = [{ value: '', label: 'All tasks' }];
+    for (const file of this.plugin.listBaseFiles()) {
+      baseOptions.push({ value: file.path, label: file.path });
+    }
+    if (hasBase && !baseOptions.some((option) => option.value === source.basePath)) {
+      baseOptions.push({ value: source.basePath, label: `${source.basePath} (missing)` });
+    }
+    const baseSelect = makeSelect('TaskNotes base', source.basePath, baseOptions);
+    baseSelect.addEventListener('change', () => {
+      void this.updateViewFilter(baseSelect.value, '');
+    });
+
+    const viewOptions = [{ value: '', label: hasBase ? 'File filters only' : 'All tasks' }];
+    for (const view of views) viewOptions.push({ value: view.name, label: view.name });
+    if (source.viewName && !viewOptions.some((option) => option.value === source.viewName)) {
+      viewOptions.push({ value: source.viewName, label: `${source.viewName} (missing)` });
+    }
+    const viewSelect = makeSelect('View', source.viewName, viewOptions);
+    viewSelect.disabled = !hasBase;
+    viewSelect.addEventListener('change', () => {
+      void this.updateViewFilter(source.basePath, viewSelect.value);
+    });
   }
 
   renderSection(root, label, items, cfg, isOverdue, isUnplanned, sectionKey = label, emptyMessage = null) {
@@ -1826,6 +1917,16 @@ class AgendaSettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
+      .setName('Show date above timeline title')
+      .setDesc('Show or hide the current date above “Today’s Timeline”.')
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.showTimelineDate !== false)
+        .onChange(async (value) => {
+          this.plugin.settings.showTimelineDate = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
       .setName('Show completed today')
       .setDesc('Add a daily review section for tasks completed today, with an Undo action to reopen them.')
       .addToggle((toggle) => toggle
@@ -1883,67 +1984,8 @@ class AgendaSettingTab extends PluginSettingTab {
     containerEl.createEl('h3', { text: 'TaskNotes view filter' });
     containerEl.createEl('p', {
       cls: 'setting-item-description',
-      text: 'Optionally restrict the timeline to tasks matching a TaskNotes Bases file and one of its views. Calendar events are not filtered. Requires TaskNotes Runtime API (query.tasks). Unsupported filters show an error and hide tasks until the filter is corrected or removed.',
+      text: 'Choose a TaskNotes Bases file and view from Filter in the timeline menu. Filtering requires TaskNotes Runtime API (query.tasks).',
     });
-
-    const baseFiles = this.plugin.listBaseFiles();
-    const baseOptions = { '': 'None — all tasks' };
-    for (const f of baseFiles) baseOptions[f.path] = f.path;
-
-    const currentBase = this.plugin.settings.tasknotesBasePath || '';
-    new Setting(containerEl)
-      .setName('TaskNotes base')
-      .setDesc('Choose a .base file (views from TaskNotes/Views are listed first).')
-      .addDropdown((dd) => {
-        dd.addOptions(baseOptions);
-        if (currentBase && !baseOptions[currentBase]) {
-          dd.addOption(currentBase, `${currentBase} (missing)`);
-        }
-        dd.setValue(currentBase);
-        dd.onChange(async (v) => {
-          this.plugin.settings.tasknotesBasePath = v;
-          this.plugin.settings.tasknotesViewName = '';
-          this.plugin.invalidateViewFilterCache();
-          await this.plugin.saveSettings();
-          this.display();
-        });
-      });
-
-    const viewOptions = { '': 'None — file filters only' };
-    let views = [];
-    if (currentBase) {
-      views = await this.plugin.listViewsInBase(currentBase);
-      for (const v of views) viewOptions[v.name] = v.name;
-    }
-    const currentView = this.plugin.settings.tasknotesViewName || '';
-    new Setting(containerEl)
-      .setName('View')
-      .setDesc('View inside the selected base whose filters should apply (combined with file-level filters).')
-      .addDropdown((dd) => {
-        dd.addOptions(viewOptions);
-        if (currentView && !viewOptions[currentView]) {
-          dd.addOption(currentView, `${currentView} (missing)`);
-        }
-        dd.setValue(currentView);
-        dd.setDisabled(!currentBase);
-        dd.onChange(async (v) => {
-          this.plugin.settings.tasknotesViewName = v;
-          this.plugin.invalidateViewFilterCache();
-          await this.plugin.saveSettings();
-        });
-      });
-
-    new Setting(containerEl)
-      .setName('Refresh view list')
-      .setDesc('Re-read .base files after creating or renaming views in TaskNotes.')
-      .addButton((btn) => btn
-        .setButtonText('Refresh')
-        .onClick(() => {
-          this.plugin.invalidateViewFilterCache();
-          this.plugin.renderAll();
-          this.display();
-        }));
-
     if (!this.plugin.hasCalendarIntegration()) {
       containerEl.createEl('p', {
         cls: 'setting-item-description',

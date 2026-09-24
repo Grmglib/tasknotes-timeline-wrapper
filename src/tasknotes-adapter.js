@@ -19,6 +19,8 @@ const SOURCE = 'tasknotes-timeline-wrapper';
 const REQUIRED_CAPS = ['tasks.read', 'tasks.write'];
 
 function createTaskNotesAdapter(app) {
+  let calendarReadErrors = [];
+
   function getPlugin() {
     if (app.plugins && typeof app.plugins.getPlugin === 'function') {
       const viaGet = app.plugins.getPlugin('tasknotes');
@@ -278,6 +280,7 @@ function createTaskNotesAdapter(app) {
   }
 
   function listCalendarEvents() {
+    calendarReadErrors = [];
     if (!getPlugin()) return [];
 
     const out = [];
@@ -302,6 +305,10 @@ function createTaskNotesAdapter(app) {
         if (typeof ics.getSubscriptions === 'function') {
           for (const s of ics.getSubscriptions() || []) {
             if (s && s.id) subs.set(s.id, s);
+            if (s && s.lastError) calendarReadErrors.push({
+              source: s.name || 'ICS calendar',
+              message: String(s.lastError),
+            });
           }
         }
         push(ics.getAllEvents(), (ev) => {
@@ -312,7 +319,7 @@ function createTaskNotesAdapter(app) {
             color: ev.color || (sub && sub.color) || '#7aa2f7',
           };
         });
-      } catch (e) { /* never break the agenda */ }
+      } catch (e) { calendarReadErrors.push({ source: 'ICS calendar', message: (e && e.message) || String(e) }); }
     }
 
     const google = getCalendarService('googleCalendarService');
@@ -330,7 +337,7 @@ function createTaskNotesAdapter(app) {
             color: ev.color || calendarColor(cal, GOOGLE_DEFAULT_COLOR),
           };
         });
-      } catch (e) { /* never break the agenda */ }
+      } catch (e) { calendarReadErrors.push({ source: 'Google Calendar', message: (e && e.message) || String(e) }); }
     }
 
     const microsoft = getCalendarService('microsoftCalendarService');
@@ -348,10 +355,14 @@ function createTaskNotesAdapter(app) {
             color: ev.color || calendarColor(cal, MICROSOFT_DEFAULT_COLOR),
           };
         });
-      } catch (e) { /* never break the agenda */ }
+      } catch (e) { calendarReadErrors.push({ source: 'Microsoft Calendar', message: (e && e.message) || String(e) }); }
     }
 
     return out;
+  }
+
+  function getCalendarReadErrors() {
+    return calendarReadErrors.slice();
   }
 
   function subscribeCalendarDataChanged(handler, alreadySubscribed) {
@@ -433,6 +444,7 @@ function createTaskNotesAdapter(app) {
     openEditModal,
     hasCalendarIntegration,
     listCalendarEvents,
+    getCalendarReadErrors,
     subscribeCalendarDataChanged,
     createTaskFromEvent,
     createNoteFromEvent,

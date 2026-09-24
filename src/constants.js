@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS = {
   showTaskTag: false,
   density: 'comfortable',
   openInNewTab: true,
+  showTimelineDate: true,
   showCalendarEvents: false,
   hideFinishedEventsToday: false,
   taskDays: 14,

@@ -29,7 +29,7 @@
 /* Native buttons retain keyboard behavior without inheriting theme button chrome.
    Avoid :where() here — zero specificity loses to Obsidian theme button rules. */
 .fw-agenda button.fw-stat,
-.fw-agenda button.fw-agenda__events-toggle,
+.fw-agenda button.fw-agenda__menu-toggle,
 .fw-agenda button.fw-agenda__input-advanced,
 .fw-agenda button.fw-agenda__input-enter,
 .fw-agenda button.fw-agenda__dayhead,
@@ -92,17 +92,6 @@
 .fw-agenda__skeleton-title { width: 72%; height: 13px; }
 .fw-agenda__skeleton-meta { width: 42%; height: 9px; margin-top: 7px; animation-delay: 120ms; }
 @keyframes fw-agenda-pulse { 50% { opacity: 0.42; } }
-.fw-agenda__cache-status {
-  margin: 0 0 10px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: var(--background-secondary);
-  color: var(--text-muted);
-  font-size: 12px;
-  text-align: center;
-}
-.fw-agenda__cache-status--stale { color: var(--text-faint); }
-
 /* light mode — also covers Forest Light picked while base mode is still dark */
 body.theme-light .fw-agenda,
 body.theme-dark.forest-theme-light .fw-agenda {
@@ -121,12 +110,38 @@ body.theme-dark.forest-theme-light .fw-agenda {
 }
 .fw-agenda__dateline .fw-sep { margin: 0 7px; opacity: 0.5; }
 
-.fw-agenda__view-filter {
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-muted);
+.fw-agenda__view-filter-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   margin: 0 0 8px;
-  opacity: 0.85;
+}
+.fw-agenda__view-filter-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: min(100%, 480px);
+  margin-top: 7px;
+  padding: 9px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+.fw-agenda__view-filter-field {
+  display: flex;
+  flex: 1 1 180px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.fw-agenda__view-filter-field label {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.fw-agenda__view-filter-field select {
+  width: 100%;
+  min-height: 30px;
+  font-size: 12px;
 }
 
 .fw-agenda__title-row {
@@ -142,7 +157,17 @@ body.theme-dark.forest-theme-light .fw-agenda {
   margin-bottom: 0;
   overflow-wrap: anywhere;
 }
-.fw-agenda button.fw-agenda__events-toggle {
+.fw-agenda__calendar-loading {
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  display: inline-flex;
+  color: var(--text-muted);
+  transform: translateY(-50%);
+}
+.fw-agenda__calendar-loading svg { width: 16px; height: 16px; animation: fw-agenda-spin 1s linear infinite; }
+@keyframes fw-agenda-spin { to { transform: rotate(360deg); } }
+.fw-agenda button.fw-agenda__menu-toggle {
   position: absolute;
   right: 0;
   top: 50%;
@@ -157,13 +182,10 @@ body.theme-dark.forest-theme-light .fw-agenda {
   cursor: pointer;
   transition: color 120ms ease, background 120ms ease;
 }
-.fw-agenda button.fw-agenda__events-toggle svg { width: 16px; height: 16px; }
-.fw-agenda button.fw-agenda__events-toggle:hover {
+.fw-agenda button.fw-agenda__menu-toggle svg { width: 16px; height: 16px; }
+.fw-agenda button.fw-agenda__menu-toggle:hover {
   color: var(--text-normal);
   background: var(--background-modifier-hover);
-}
-.fw-agenda button.fw-agenda__events-toggle.is-active {
-  color: var(--interactive-accent);
 }
 
 /* stat tiles — colored, clickable, active on select */
@@ -524,6 +546,7 @@ body.theme-dark.forest-theme-light .fw-agenda {
   .fw-agenda *, .fw-agenda *::before, .fw-agenda *::after { transition: none; }
   .fw-agenda button.fw-stat:hover { transform: none; }
   .fw-agenda__skeleton-dot, .fw-agenda__skeleton-title, .fw-agenda__skeleton-meta { animation: none; }
+  .fw-agenda__calendar-loading svg { animation: none; }
 }
 
 @media (hover: none) {
