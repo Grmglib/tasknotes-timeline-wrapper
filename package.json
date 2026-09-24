@@ -4,13 +4,14 @@
   "private": true,
   "description": "Obsidian plugin — TaskNotes Timeline Wrapper with optional calendar events",
   "scripts": {
-    "prebuild": "node scripts/sync-version.js --check",
+    "prebuild": "node scripts/sync-version.js",
     "build": "node esbuild.config.js production",
     "dev": "node esbuild.config.js",
+    "sync:version": "node scripts/sync-version.js",
     "pretest": "node scripts/sync-version.js --check",
     "test": "node --test test/*.test.js",
     "check:version": "node scripts/sync-version.js --check",
-    "version": "node scripts/sync-version.js && git add manifest.json versions.json"
+    "version": "node scripts/sync-version.js && git add manifest.json versions.json package-lock.json"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

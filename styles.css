@@ -235,6 +235,11 @@ body.theme-dark.forest-theme-light .fw-agenda {
   color: var(--text-normal);
   font-size: 12px;
 }
+.fw-agenda__search-scope {
+  margin: -5px 0 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
 
 /* new-task input */
 .fw-agenda__input {

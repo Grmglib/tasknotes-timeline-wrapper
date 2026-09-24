@@ -285,14 +285,16 @@ function createTaskNotesAdapter(app) {
 
     const out = [];
     const seen = new Set();
-    const push = (list, resolveMeta) => {
+    const push = (list, resolveMeta, source) => {
       for (const ev of list || []) {
         if (!ev) continue;
-        const id = ev.id || `${ev.subscriptionId || 'cal'}:${ev.start || ''}:${ev.title || ''}`;
-        if (!id || seen.has(id)) continue;
+        const eventId = ev.id || `${ev.start || ''}:${ev.end || ''}:${ev.title || ''}`;
+        if (!eventId) continue;
         let meta;
         try { meta = resolveMeta(ev); } catch (e) { continue; }
         if (!meta) continue;
+        const id = `${source}:${meta.calendarId || ev.subscriptionId || meta.calendarName || 'default'}:${eventId}`;
+        if (seen.has(id)) continue;
         seen.add(id);
         out.push(Object.assign({}, ev, meta, { isEvent: true, id }));
       }
@@ -315,10 +317,11 @@ function createTaskNotesAdapter(app) {
           const sub = subs.get(ev.subscriptionId);
           if (sub && sub.enabled === false) return null;
           return {
+            calendarId: ev.subscriptionId || 'default',
             calendarName: (sub && sub.name) || 'Calendar',
             color: ev.color || (sub && sub.color) || '#7aa2f7',
           };
-        });
+        }, 'ics');
       } catch (e) { calendarReadErrors.push({ source: 'ICS calendar', message: (e && e.message) || String(e) }); }
     }
 
@@ -333,10 +336,11 @@ function createTaskNotesAdapter(app) {
           const cal = findProviderCalendar(calendars, calId);
           if (!calendarIsEnabled(cal)) return null;
           return {
+            calendarId: calId || 'default',
             calendarName: calendarLabel(cal, 'Google Calendar'),
             color: ev.color || calendarColor(cal, GOOGLE_DEFAULT_COLOR),
           };
-        });
+        }, 'google');
       } catch (e) { calendarReadErrors.push({ source: 'Google Calendar', message: (e && e.message) || String(e) }); }
     }
 
@@ -351,10 +355,11 @@ function createTaskNotesAdapter(app) {
           const cal = findProviderCalendar(calendars, calId);
           if (!calendarIsEnabled(cal)) return null;
           return {
+            calendarId: calId || 'default',
             calendarName: calendarLabel(cal, 'Microsoft Calendar'),
             color: ev.color || calendarColor(cal, MICROSOFT_DEFAULT_COLOR),
           };
-        });
+        }, 'microsoft');
       } catch (e) { calendarReadErrors.push({ source: 'Microsoft Calendar', message: (e && e.message) || String(e) }); }
     }
 
@@ -413,12 +418,17 @@ function createTaskNotesAdapter(app) {
   }
 
   function canCreateFromEvents() {
+    return canCreateTaskFromEvents() && canCreateNoteFromEvents();
+  }
+
+  function canCreateTaskFromEvents() {
     const svc = getIcsNoteService();
-    return !!(
-      svc
-      && typeof svc.createTaskFromICS === 'function'
-      && typeof svc.createNoteFromICS === 'function'
-    );
+    return !!(svc && typeof svc.createTaskFromICS === 'function');
+  }
+
+  function canCreateNoteFromEvents() {
+    const svc = getIcsNoteService();
+    return !!(svc && typeof svc.createNoteFromICS === 'function');
   }
 
   return {
@@ -451,6 +461,8 @@ function createTaskNotesAdapter(app) {
     findRelatedNotes,
     canFindRelatedNotes,
     canCreateFromEvents,
+    canCreateTaskFromEvents,
+    canCreateNoteFromEvents,
   };
 }
 

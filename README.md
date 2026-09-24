@@ -20,6 +20,7 @@ If TaskNotes is missing or the API is incompatible, the timeline shows a clear e
 - **Inline quick edit** — change priority, scheduled date, and due date without opening the task modal
 - **Loading feedback** — a small skeleton appears while tasks load
 - **Completed today** — optional daily review section with an Undo action to reopen completed tasks
+- **Scheduled reminders** — optional operating system notifications before and at the start of timed tasks and calendar events; requires notification permission
 - **Quick add** — Enter creates a task via `api.tasks.create`; the chevron opens the TaskNotes creation modal
 - **Status ring** — click completes or reopens via the API; right-click opens the native TaskNotes task menu (any configured status, recurrence actions when available)
 - **Task interactions** — click title for TaskNotes details modal; context menu for native actions (or a local fallback); mod/middle-click open the note
@@ -72,6 +73,7 @@ view: Work Context
 - Timeline density (comfortable / compact)
 - Calendar: show events, hide finished events today, task/event lookahead, max recurring occurrences
 - Completed-today daily review section (show / hide)
+- Scheduled task and event system notifications, with a configurable lead time (5 minutes to 1 hour) and operating system permission
 - TaskNotes base + view filter (optional); calendar events are not filtered by the base
 
 ## How tasks are loaded and updated

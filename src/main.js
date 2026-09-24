@@ -37,6 +37,7 @@ const {
   withinLookahead,
   indexAgendaTasks,
   eventDateKeys,
+  eventStartMoment,
   hasClockTime,
   eventHasEnded,
   isEventOngoing,
@@ -56,6 +57,8 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     this._statusUpdates = new Set();
     this._taskMutations = new Map();
     this._completionUndos = new Map();
+    this._sentScheduledReminders = new Map();
+    this._scheduledReminderCheckRunning = false;
     this.register(() => {
       this._unloading = true;
       for (const record of [...this._completionUndos.values()]) this.dismissCompletionUndo(record);
@@ -128,10 +131,14 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     this.registerInterval(window.setInterval(() => {
       this.controllers.forEach((controller) => controller.refreshTimeIndicators());
     }, 30 * 1000));
+    this.registerInterval(window.setInterval(() => {
+      void this.checkScheduledReminders();
+    }, 15 * 1000));
 
     this.app.workspace.onLayoutReady(() => {
       this.subscribeCalendarServices();
       this.subscribeTaskNotesLifecycle();
+      void this.checkScheduledReminders();
     });
     // Safety net if TaskNotes loads after us — also re-tried from render().
     this.register(() => this.unsubscribeCalendarServices());
@@ -370,6 +377,78 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
       this._calendarCacheStore.scheduleSave(resolved.persistEvents);
     }
     return resolved.events;
+  }
+
+  async checkScheduledReminders() {
+    const NotificationApi = window.Notification;
+    if (!this.settings?.scheduledNotificationsEnabled
+      || !NotificationApi
+      || NotificationApi.permission !== 'granted'
+      || this._scheduledReminderCheckRunning
+      || this._unloading) return;
+    this._scheduledReminderCheckRunning = true;
+    try {
+      const cfg = this.getConfig();
+      const [tasks, events] = await Promise.all([
+        this.getTasks(cfg),
+        Promise.resolve(this.getCalendarEvents()),
+      ]);
+      const now = Date.now();
+      const leadMinutes = parseNonNegInt(
+        this.settings.scheduledNotificationLeadMinutes,
+        DEFAULT_SETTINGS.scheduledNotificationLeadMinutes,
+      );
+      const leadMs = leadMinutes * 60 * 1000;
+      const startGraceMs = 2 * 60 * 1000;
+      const staleBeforeMs = 24 * 60 * 60 * 1000;
+
+      for (const [key, startMs] of this._sentScheduledReminders) {
+        if (startMs < now - staleBeforeMs) this._sentScheduledReminders.delete(key);
+      }
+
+      const notify = (kind, title, identity, startMs) => {
+        const phase = now >= startMs ? 'start' : 'before';
+        const key = `${identity}:${startMs}:${phase}`;
+        if (this._sentScheduledReminders.has(key)) return;
+        if (phase === 'before' && (leadMinutes === 0 || now < startMs - leadMs)) return;
+        if (phase === 'start' && now - startMs > startGraceMs) return;
+        const heading = phase === 'start'
+          ? `${kind} starting now`
+          : `${kind} in ${leadMinutes} minutes`;
+        try {
+          new NotificationApi(heading, { body: title, tag: key });
+          this._sentScheduledReminders.set(key, startMs);
+        } catch (error) {
+          console.warn('[tasknotes-timeline-wrapper] Could not show system notification', error);
+        }
+      };
+
+      for (const task of tasks) {
+        if (!task || task.done) continue;
+        const scheduled = task.scheduled;
+        if (!hasClockTime(scheduled)) continue;
+        const start = moment(scheduled, [moment.ISO_8601, 'YYYY-MM-DD HH:mm', 'YYYY-MM-DDTHH:mm'], true);
+        if (!start.isValid()) continue;
+        const startMs = start.valueOf();
+        if (now >= startMs - leadMs && now < startMs + startGraceMs) {
+          notify('Task', task.title || task.path || 'Untitled task', `task:${task.path}`, startMs);
+        }
+      }
+
+      for (const event of events) {
+        if (!event || event.allDay || !hasClockTime(event.start)) continue;
+        const start = eventStartMoment(event);
+        if (!start.isValid()) continue;
+        const startMs = start.valueOf();
+        if (now >= startMs - leadMs && now < startMs + startGraceMs) {
+          notify('Event', event.title || 'Untitled event', `event:${event.id || event.calendarName || ''}`, startMs);
+        }
+      }
+    } catch (error) {
+      console.error('[tasknotes-timeline-wrapper] Scheduled reminder check failed', error);
+    } finally {
+      this._scheduledReminderCheckRunning = false;
+    }
   }
 
   reportCalendarReadErrors() {
@@ -800,45 +879,58 @@ class AgendaEventInfoModal extends Modal {
       }
     }
 
-    new Setting(contentEl).setName('Actions').setHeading();
+    const canCreateNote = adapter.canCreateNoteFromEvents();
+    const canCreateTask = adapter.canCreateTaskFromEvents();
+    if (canCreateNote || canCreateTask) {
+      new Setting(contentEl).setName('Actions').setHeading();
+      const createSetting = new Setting(contentEl)
+        .setName('Create from event')
+        .setDesc(canCreateNote && canCreateTask
+          ? 'Create a TaskNotes task or note linked to this calendar event.'
+          : canCreateTask
+            ? 'Create a TaskNotes task linked to this calendar event.'
+            : 'Create a note linked to this calendar event.');
 
-    new Setting(contentEl)
-      .setName('Create from event')
-      .setDesc('Create a TaskNotes task or note linked to this calendar event.')
-      .addButton((btn) => btn
-        .setButtonText('Create note')
-        .onClick(async () => {
-          try {
-            const result = await adapter.createNoteFromEvent(ev);
-            new Notice(`Note created: ${ev.title}`);
-            if (result && result.file) {
-              await this.app.workspace.getLeaf(false).openFile(result.file);
-              this.close();
-            } else {
-              await this.renderContent();
+      if (canCreateNote) {
+        createSetting.addButton((btn) => btn
+          .setButtonText('Create note')
+          .onClick(async () => {
+            try {
+              const result = await adapter.createNoteFromEvent(ev);
+              new Notice(`Note created: ${ev.title}`);
+              if (result && result.file) {
+                await this.app.workspace.getLeaf(false).openFile(result.file);
+                this.close();
+              } else {
+                await this.renderContent();
+              }
+            } catch (e) {
+              new Notice(e && e.message ? e.message : 'Could not create note from event.');
             }
-          } catch (e) {
-            new Notice(e && e.message ? e.message : 'Could not create note from event.');
-          }
-        }))
-      .addButton((btn) => btn
-        .setButtonText('Create task')
-        .setCta()
-        .onClick(async () => {
-          try {
-            const result = await adapter.createTaskFromEvent(ev);
-            const title = (result && result.taskInfo && result.taskInfo.title) || ev.title;
-            new Notice(`Task created: ${title}`);
-            if (result && result.file) {
-              await this.app.workspace.getLeaf(false).openFile(result.file);
-              this.close();
-            } else {
-              await this.renderContent();
+          }));
+      }
+
+      if (canCreateTask) {
+        createSetting.addButton((btn) => btn
+          .setButtonText('Create task')
+          .setCta()
+          .onClick(async () => {
+            try {
+              const result = await adapter.createTaskFromEvent(ev);
+              const title = (result && result.taskInfo && result.taskInfo.title) || ev.title;
+              new Notice(`Task created: ${title}`);
+              if (result && result.file) {
+                await this.app.workspace.getLeaf(false).openFile(result.file);
+                this.close();
+              } else {
+                await this.renderContent();
+              }
+            } catch (e) {
+              new Notice(e && e.message ? e.message : 'Could not create task from event.');
             }
-          } catch (e) {
-            new Notice(e && e.message ? e.message : 'Could not create task from event.');
-          }
-        }));
+          }));
+      }
+    }
 
     if (adapter.canFindRelatedNotes()) {
       new Setting(contentEl)
@@ -1017,6 +1109,7 @@ class AgendaController {
     if (!this.hasRendered) this.renderState('loading', 'Carregando tarefas…');
     let cfg;
     let allTasks;
+    let taskCatalog;
     let active;
     let viewFilter;
     let viewFilterSource;
@@ -1024,6 +1117,7 @@ class AgendaController {
     try {
       cfg = this.plugin.getConfig();
       allTasks = await this.plugin.getTasks(cfg);
+      taskCatalog = allTasks;
       active = allTasks.filter((t) => !t.done);
       if (this.disposed || renderId !== this._renderId) return;
       viewFilterSource = this.currentViewFilterSource();
@@ -1232,6 +1326,7 @@ class AgendaController {
     this.listEl = list;
     this.listModel = {
       viewFilter,
+      viewFilterSource,
       dayKeys,
       eventBuckets,
       taskBuckets,
@@ -1241,7 +1336,7 @@ class AgendaController {
       showCompletedToday: this.plugin.settings.showCompletedToday !== false,
       todoToday,
       allTasks: active,
-      taskCatalog: allTasks,
+      taskCatalog: this.plugin.settings.ignoreBaseFilterInSearch ? taskCatalog : allTasks,
       todayEvents,
       today,
       todayKey,
@@ -1267,13 +1362,14 @@ class AgendaController {
     root.empty();
     this.timeIndicators = [];
     const {
-      viewFilter, dayKeys, eventBuckets, taskBuckets, overdue, unplanned,
+      viewFilter, viewFilterSource, dayKeys, eventBuckets, taskBuckets, overdue, unplanned,
       completedToday, showCompletedToday, todoToday, allTasks, todayEvents, today, todayKey,
       taskDays, eventDays, showEmptyDays, cfg,
     } = model;
     const eventsFor = (dayMoment) => eventBuckets.get(dayMoment.format('YYYY-MM-DD')) || [];
     const hasAdvancedFilters = !!this.searchQuery.trim();
-    if (hasAdvancedFilters && viewFilter.status !== 'error') {
+    const ignoreBaseFilterForSearch = !!this.plugin.settings.ignoreBaseFilterInSearch;
+    if (hasAdvancedFilters && (viewFilter.status !== 'error' || ignoreBaseFilterForSearch)) {
       const query = this.searchQuery.trim().toLocaleLowerCase();
       let matches = model.taskCatalog.filter((task) => {
         if (query) {
@@ -1283,6 +1379,14 @@ class AgendaController {
         }
         return true;
       });
+      const statusOrder = new Map(Object.keys(cfg.statusMap || {}).map((status, index) => [status, index]));
+      const taskDate = (task) => [localDateKey(task.scheduled), localDateKey(task.due)]
+        .filter(Boolean)
+        .sort()[0] || '9999-12-31';
+      matches.sort((a, b) => taskDate(a).localeCompare(taskDate(b))
+        || (statusOrder.get(a.status) ?? Number.MAX_SAFE_INTEGER)
+          - (statusOrder.get(b.status) ?? Number.MAX_SAFE_INTEGER)
+        || String(a.title || '').localeCompare(String(b.title || '')));
       if (this.filter === 'todo') matches = matches.filter((task) => !task.done);
       else if (this.filter === 'overdue') matches = matches.filter((task) => !task.done && task.due && localDateKey(task.due) < todayKey);
       else if (this.filter === 'unplanned') matches = matches.filter((task) => !task.done && !task.scheduled && !task.due);
@@ -1302,6 +1406,12 @@ class AgendaController {
           }
         }
       }
+      if (ignoreBaseFilterForSearch && viewFilterSource?.basePath) {
+        root.createDiv({
+          cls: 'fw-agenda__search-scope',
+          text: 'Search includes tasks outside the selected Base/view filter.',
+        });
+      }
       const results = matches.concat(matchingEvents);
       results.length
         ? this.renderSection(
@@ -1312,6 +1422,8 @@ class AgendaController {
           false,
           false,
           'matching-tasks-and-events',
+          null,
+          true,
         )
         : this.empty(root, 'No tasks or events match this search.');
       this.refreshTimeIndicators();
@@ -1443,7 +1555,7 @@ class AgendaController {
     });
   }
 
-  renderSection(root, label, items, cfg, isOverdue, isUnplanned, sectionKey = label, emptyMessage = null) {
+  renderSection(root, label, items, cfg, isOverdue, isUnplanned, sectionKey = label, emptyMessage = null, preserveOrder = false) {
     const collapsed = this.collapsed.has(sectionKey);
     const section = root.createDiv({ cls: 'fw-agenda__section' });
     const isDayDropTarget = /^\d{4}-\d{2}-\d{2}$/.test(sectionKey) && !isOverdue && !isUnplanned;
@@ -1494,7 +1606,7 @@ class AgendaController {
         if (emptyMessage) this.empty(content, emptyMessage);
         return;
       }
-      const sorted = sortMixedItems(items.slice(), cfg);
+      const sorted = preserveOrder ? items.slice() : sortMixedItems(items.slice(), cfg);
       for (const item of sorted) {
         if (item.isEvent) this.renderEvent(content, item, /^\d{4}-\d{2}-\d{2}$/.test(sectionKey) ? sectionKey : null);
         else this.renderTask(content, item, cfg);
@@ -1544,7 +1656,7 @@ class AgendaController {
     const titleEl = body.createDiv({ cls: 'fw-task__title fw-event__title', text: ev.title || 'Untitled event' });
     titleEl.setAttribute('role', 'button');
     titleEl.setAttribute('tabindex', '0');
-    titleEl.setAttribute('aria-label', 'Show calendar event details');
+    titleEl.setAttribute('aria-label', `Show details for ${ev.title || 'Untitled event'}`);
 
     const openDetails = (e) => {
       e.preventDefault();
@@ -1652,7 +1764,7 @@ class AgendaController {
     titleEl.setAttribute('role', 'button');
     titleEl.setAttribute('tabindex', '0');
     titleEl.setAttribute('data-fw-focus', `task-${task.file.path}`);
-    titleEl.setAttribute('aria-label', 'Show task details');
+    titleEl.setAttribute('aria-label', `Show details for ${task.title || 'Untitled task'}`);
 
     const openDetails = (e) => {
       // Mod-click keeps Obsidian's open-in-new-tab/split meaning.
@@ -1901,8 +2013,56 @@ class AgendaSettingTab extends PluginSettingTab {
       .setDesc('When showing calendar events, omit today\'s events whose end time has already passed. Multi-day events still appear on their remaining days.')
       .addToggle((t) => t
         .setValue(this.plugin.settings.hideFinishedEventsToday)
-        .onChange(async (v) => {
-          this.plugin.settings.hideFinishedEventsToday = v;
+      .onChange(async (v) => {
+        this.plugin.settings.hideFinishedEventsToday = v;
+        await this.plugin.saveSettings();
+      }));
+
+    containerEl.createEl('h3', { text: 'Scheduled reminders' });
+    const NotificationApi = window.Notification;
+    const notificationPermission = NotificationApi ? NotificationApi.permission : 'unsupported';
+    const permissionDescription = notificationPermission === 'granted'
+      ? 'System notification permission is granted.'
+      : notificationPermission === 'denied'
+        ? 'System notifications are blocked. Allow notifications for Obsidian in your operating system settings.'
+        : notificationPermission === 'unsupported'
+          ? 'System notifications are not supported in this Obsidian environment.'
+          : 'Turning this on will ask for permission to show system notifications.';
+    new Setting(containerEl)
+      .setName('System notifications for scheduled tasks and events')
+      .setDesc(`Show an operating system notification before the scheduled time and again when it starts. Tasks need a scheduled date with a time; all-day events are ignored. ${permissionDescription}`)
+      .addToggle((toggle) => toggle
+        .setValue(!!this.plugin.settings.scheduledNotificationsEnabled && notificationPermission === 'granted')
+        .onChange(async (value) => {
+          let enabled = value && !!NotificationApi;
+          if (enabled && NotificationApi.permission === 'default'
+            && typeof NotificationApi.requestPermission === 'function') {
+            try {
+              enabled = (await NotificationApi.requestPermission()) === 'granted';
+            } catch (error) {
+              console.warn('[tasknotes-timeline-wrapper] System notification permission request failed', error);
+              enabled = false;
+            }
+          } else if (enabled) {
+            enabled = NotificationApi.permission === 'granted';
+          }
+          this.plugin.settings.scheduledNotificationsEnabled = enabled;
+          await this.plugin.saveSettings();
+          await this.display();
+          if (enabled) void this.plugin.checkScheduledReminders();
+        }));
+
+    new Setting(containerEl)
+      .setName('Reminder lead time')
+      .setDesc('How long before a scheduled task or event to show the first notification. Choose Never to disable the advance notification; the start-time notification remains enabled.')
+      .addDropdown((dropdown) => dropdown
+        .addOptions({ 0: 'Never', 5: '5 minutes', 10: '10 minutes', 15: '15 minutes', 30: '30 minutes', 60: '1 hour' })
+        .setValue(String(this.plugin.settings.scheduledNotificationLeadMinutes ?? DEFAULT_SETTINGS.scheduledNotificationLeadMinutes))
+        .onChange(async (value) => {
+          this.plugin.settings.scheduledNotificationLeadMinutes = parseNonNegInt(
+            value,
+            DEFAULT_SETTINGS.scheduledNotificationLeadMinutes,
+          );
           await this.plugin.saveSettings();
         }));
 
@@ -1986,6 +2146,15 @@ class AgendaSettingTab extends PluginSettingTab {
       cls: 'setting-item-description',
       text: 'Choose a TaskNotes Bases file and view from Filter in the timeline menu. Filtering requires TaskNotes Runtime API (query.tasks).',
     });
+    new Setting(containerEl)
+      .setName('Search outside the Base/view filter')
+      .setDesc('Include matching tasks from all of TaskNotes while searching, even when a Base and view are selected in the timeline.')
+      .addToggle((toggle) => toggle
+        .setValue(!!this.plugin.settings.ignoreBaseFilterInSearch)
+        .onChange(async (value) => {
+          this.plugin.settings.ignoreBaseFilterInSearch = value;
+          await this.plugin.saveSettings();
+        }));
     if (!this.plugin.hasCalendarIntegration()) {
       containerEl.createEl('p', {
         cls: 'setting-item-description',

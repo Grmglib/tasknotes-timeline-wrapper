@@ -23,6 +23,9 @@ const DEFAULT_SETTINGS = {
   maxRecurringOccurrences: 3,
   tasknotesBasePath: '',
   tasknotesViewName: '',
+  ignoreBaseFilterInSearch: false,
+  scheduledNotificationsEnabled: false,
+  scheduledNotificationLeadMinutes: 10,
 };
 
 // Bases note/file property → TaskNotes runtime query field.
