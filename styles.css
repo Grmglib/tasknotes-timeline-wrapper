@@ -26,8 +26,14 @@
   --fw-status-size: 18px;
 }
 
-/* Native buttons retain keyboard behavior without inheriting theme button chrome. */
-:where(.fw-agenda) button:where(.fw-stat, .fw-agenda__events-toggle, .fw-agenda__input-advanced, .fw-agenda__input-enter, .fw-agenda__dayhead, .fw-task__status) {
+/* Native buttons retain keyboard behavior without inheriting theme button chrome.
+   Avoid :where() here — zero specificity loses to Obsidian theme button rules. */
+.fw-agenda button.fw-stat,
+.fw-agenda button.fw-agenda__events-toggle,
+.fw-agenda button.fw-agenda__input-advanced,
+.fw-agenda button.fw-agenda__input-enter,
+.fw-agenda button.fw-agenda__dayhead,
+.fw-agenda button.fw-task__status {
   appearance: none;
   background: transparent;
   border: 0;
@@ -136,7 +142,7 @@ body.theme-dark.forest-theme-light .fw-agenda {
   margin-bottom: 0;
   overflow-wrap: anywhere;
 }
-.fw-agenda__events-toggle {
+.fw-agenda button.fw-agenda__events-toggle {
   position: absolute;
   right: 0;
   top: 50%;
@@ -151,12 +157,12 @@ body.theme-dark.forest-theme-light .fw-agenda {
   cursor: pointer;
   transition: color 120ms ease, background 120ms ease;
 }
-.fw-agenda__events-toggle svg { width: 16px; height: 16px; }
-.fw-agenda__events-toggle:hover {
+.fw-agenda button.fw-agenda__events-toggle svg { width: 16px; height: 16px; }
+.fw-agenda button.fw-agenda__events-toggle:hover {
   color: var(--text-normal);
   background: var(--background-modifier-hover);
 }
-.fw-agenda__events-toggle.is-active {
+.fw-agenda button.fw-agenda__events-toggle.is-active {
   color: var(--interactive-accent);
 }
 
@@ -167,12 +173,13 @@ body.theme-dark.forest-theme-light .fw-agenda {
   gap: 8px;
   margin-bottom: 15px;
 }
-.fw-stat {
+.fw-agenda button.fw-stat {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   min-width: 0;
+  background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: 9px;
   padding: 6px 4px;
@@ -180,26 +187,14 @@ body.theme-dark.forest-theme-light .fw-agenda {
   cursor: pointer;
   transition: transform 100ms ease, box-shadow 100ms ease, filter 100ms ease;
 }
-.fw-stat:hover { transform: translateY(-1px); filter: brightness(1.08); }
-.fw-stat.is-active { box-shadow: 0 0 0 2px var(--interactive-accent); }
+.fw-agenda button.fw-stat:hover { transform: translateY(-1px); filter: brightness(1.08); }
+.fw-agenda button.fw-stat.is-active { box-shadow: 0 0 0 2px var(--interactive-accent); }
 .fw-stat__num { font-size: 19px; font-weight: 600; line-height: 1.1; }
 .fw-stat__label { font-size: 11px; color: var(--text-muted); }
 
-/* default tint per tile — the % is the knob; green needs more since it fights the green bg */
-.fw-stat--todo {
-  background: var(--background-secondary);
-  background: color-mix(in srgb, var(--fw-todo) 30%, var(--background-secondary));
-}
+/* Keep the tiles on the agenda background; color is carried by the count. */
 .fw-stat--todo .fw-stat__num { color: var(--fw-todo); }
-.fw-stat--overdue {
-  background: var(--background-secondary);
-  background: color-mix(in srgb, var(--color-red, #cc5a5a) 24%, var(--background-secondary));
-}
 .fw-stat--overdue .fw-stat__num { color: var(--color-red, #cc5a5a); }
-.fw-stat--unplanned {
-  background: var(--background-secondary);
-  background: color-mix(in srgb, var(--color-yellow, #e8c07d) 22%, var(--background-secondary));
-}
 .fw-stat--unplanned .fw-stat__num { color: var(--color-yellow, #e8c07d); }
 
 /* live task and calendar-event search */
@@ -234,7 +229,7 @@ body.theme-dark.forest-theme-light .fw-agenda {
   margin-bottom: 3px;
 }
 .fw-agenda__input-label { font-size: 12px; color: var(--text-muted); }
-.fw-agenda__input-advanced {
+.fw-agenda button.fw-agenda__input-advanced {
   display: flex;
   align-items: center;
   color: var(--text-muted);
@@ -242,10 +237,10 @@ body.theme-dark.forest-theme-light .fw-agenda {
   padding: 1px 3px;
   border-radius: 5px;
 }
-.fw-agenda__input-advanced:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
-.fw-agenda__input-advanced svg { width: 14px; height: 14px; }
+.fw-agenda button.fw-agenda__input-advanced:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.fw-agenda button.fw-agenda__input-advanced svg { width: 14px; height: 14px; }
 .fw-agenda__input-row { display: flex; align-items: center; gap: 8px; }
-.fw-agenda__input-enter {
+.fw-agenda button.fw-agenda__input-enter {
   display: flex;
   align-items: center;
   flex-shrink: 0;
@@ -254,8 +249,8 @@ body.theme-dark.forest-theme-light .fw-agenda {
   padding: 3px;
   border-radius: 6px;
 }
-.fw-agenda__input-enter:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
-.fw-agenda__input-enter svg { width: 16px; height: 16px; }
+.fw-agenda button.fw-agenda__input-enter:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.fw-agenda button.fw-agenda__input-enter svg { width: 16px; height: 16px; }
 .fw-agenda__input-field {
   flex: 1;
   min-width: 0;
@@ -271,12 +266,14 @@ body.theme-dark.forest-theme-light .fw-agenda {
 }
 .fw-agenda__input-field::placeholder { color: var(--text-faint); }
 
-/* day / section headers */
-.fw-agenda button.fw-agenda__dayhead {
-  /* Keep section labels transparent even when a theme styles native buttons. */
-  background: transparent !important;
-  box-shadow: none !important;
-  border: 0 !important;
+/* day / section headers — beat theme button:hover/focus chrome without !important */
+.fw-agenda button.fw-agenda__dayhead,
+.fw-agenda button.fw-agenda__dayhead:hover,
+.fw-agenda button.fw-agenda__dayhead:active,
+.fw-agenda button.fw-agenda__dayhead:focus {
+  background: transparent;
+  box-shadow: none;
+  border: 0;
   border-radius: 0;
   height: auto;
   display: flex;
@@ -343,20 +340,21 @@ body.theme-dark.forest-theme-light .fw-agenda {
   padding-top: 2px;
   height: fit-content;
 }
-.fw-agenda button.fw-task__status {
+.fw-agenda button.fw-task__status,
+.fw-agenda button.fw-task__status:focus {
   box-sizing: border-box;
   width: var(--fw-status-size);
   height: var(--fw-status-size);
   min-width: 0;
   padding: 0;
-  background: transparent !important;
-  box-shadow: none !important;
+  background: transparent;
+  box-shadow: none;
   border-radius: 50%;
   border: 2px solid #808080;
   cursor: pointer;
   transition: background 120ms ease;
 }
-.fw-task__status:hover { background: var(--background-modifier-border); }
+.fw-agenda button.fw-task__status:hover { background: var(--background-modifier-border); }
 .fw-task__priority {
   width: 9px;
   height: 9px;
@@ -402,7 +400,6 @@ body.theme-dark.forest-theme-light .fw-agenda {
 }
 .fw-task__edit-toggle:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
 .fw-task__edit-toggle svg { width: 14px; height: 14px; }
-.fw-task__quick-edit[hidden] { display: none !important; }
 .fw-task__quick-edit {
   display: flex;
   flex-wrap: wrap;
@@ -414,6 +411,7 @@ body.theme-dark.forest-theme-light .fw-agenda {
   border-radius: 8px;
   background: var(--background-secondary);
 }
+.fw-task__quick-edit[hidden] { display: none; }
 .fw-task__quick-edit-field { display: flex; flex-direction: column; gap: 4px; min-width: 100px; }
 .fw-task__quick-edit-field label { color: var(--text-muted); font-size: 11px; }
 .fw-task__quick-edit-field input,
@@ -425,7 +423,7 @@ body.theme-dark.forest-theme-light .fw-agenda {
   margin-top: 3px;
 }
 .fw-task__overdue svg { width: 13px; height: 13px; }
-.fw-task__overdue[hidden], .fw-event__now[hidden] { display: none !important; }
+.fw-task__overdue[hidden], .fw-event__now[hidden] { display: none; }
 
 .fw-task__meta {
   font-size: var(--fw-meta-size);
@@ -524,7 +522,7 @@ body.theme-dark.forest-theme-light .fw-agenda {
 
 @media (prefers-reduced-motion: reduce) {
   .fw-agenda *, .fw-agenda *::before, .fw-agenda *::after { transition: none; }
-  .fw-stat:hover { transform: none; }
+  .fw-agenda button.fw-stat:hover { transform: none; }
   .fw-agenda__skeleton-dot, .fw-agenda__skeleton-title, .fw-agenda__skeleton-meta { animation: none; }
 }
 
