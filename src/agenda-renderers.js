@@ -111,7 +111,9 @@ function renderTask(root, task, cfg) {
       'aria-label',
       task.done
         ? `Reopen ${task.title}. Right-click for more status options.`
-        : `Complete ${task.title}. Right-click for more status options.`,
+        : task.recurrence
+          ? `Complete this occurrence of ${task.title}. Right-click for more status options.`
+          : `Complete ${task.title}. Right-click for more status options.`,
     );
     statusEl.disabled = this.pendingStatus.has(task.file.path);
     statusEl.addEventListener('click', async (e) => {

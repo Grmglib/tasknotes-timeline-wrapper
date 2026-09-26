@@ -177,6 +177,17 @@ function createTaskNotesAdapter(app) {
     return api.tasks.uncomplete(path, options, mutationContext(context));
   }
 
+  async function toggleCompleteInstance(path, date, context) {
+    const compat = getCompatibility();
+    if (!compat.ok) throw new Error(compat.message);
+    const api = getApi();
+    if (!hasCapability('recurring.write') || !api.recurring || typeof api.recurring.toggleCompleteInstance !== 'function') {
+      throw new Error('TaskNotes recurring instance completion is unavailable.');
+    }
+    const occurrence = date ? String(date) : undefined;
+    return api.recurring.toggleCompleteInstance(path, occurrence, mutationContext(context));
+  }
+
   async function setStatus(path, status, context) {
     const compat = getCompatibility();
     if (!compat.ok) throw new Error(compat.message);
@@ -445,6 +456,7 @@ function createTaskNotesAdapter(app) {
     createTask,
     complete,
     uncomplete,
+    toggleCompleteInstance,
     setStatus,
     updateTask,
     showTaskMenu,

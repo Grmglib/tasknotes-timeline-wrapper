@@ -25,6 +25,8 @@ function mapTaskInfo(info, cfg, resolveFile) {
   const due = normalizeTaskDate(info.due);
   const scheduled = normalizeTaskDate(info.scheduled);
   const completedDate = normalizeTaskDate(info.completedDate);
+  const recurrence = readRecurrence(info);
+  const recurrenceAnchor = readRecurrenceAnchor(info);
   const projects = Array.isArray(info.projects)
     ? linkNames(info.projects)
     : linkNames(info.projects);
@@ -40,8 +42,50 @@ function mapTaskInfo(info, cfg, resolveFile) {
     completedDate,
     projects,
     tags: orderTags(tags, cfg.taskTag),
+    recurrence,
+    recurrenceAnchor,
     done: !!(cfg.statusMap[status] && cfg.statusMap[status].isCompleted),
   };
+}
+
+function readRecurrence(info) {
+  const value = info && info.recurrence;
+  if (value == null || value === '') return null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function readRecurrenceAnchor(info) {
+  const value = info && (info.recurrence_anchor || info.recurrenceAnchor);
+  if (value == null || value === '') return null;
+  const text = String(value).trim().toLowerCase();
+  return text || null;
+}
+
+function taskDateKey(value) {
+  if (value == null || value === '') return null;
+  const match = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : null;
+}
+
+function isRecurringSeries(task) {
+  return !!(task && task.recurrence && String(task.recurrence).trim());
+}
+
+// complete_instances indexes an occurrence day. Scheduled-anchor series use the
+// scheduled day (including a late completion of that day). Completion-anchor
+// series use the day the instance is completed.
+function recurringOccurrenceDate(task, todayKey) {
+  if (!isRecurringSeries(task)) return null;
+  if (task.recurrenceAnchor === 'completion') return todayKey || null;
+  return taskDateKey(task.scheduled) || taskDateKey(task.due) || todayKey || null;
+}
+
+function completionTarget(task, todayKey) {
+  if (task && !task.done && isRecurringSeries(task)) {
+    return { kind: 'instance', date: recurringOccurrenceDate(task, todayKey) };
+  }
+  return { kind: 'task', date: null };
 }
 
 function normalizeTaskDate(value) {
@@ -58,4 +102,7 @@ module.exports = {
   mapTaskInfo,
   normalizeTaskDate,
   isStatusCompleted,
+  isRecurringSeries,
+  recurringOccurrenceDate,
+  completionTarget,
 };
