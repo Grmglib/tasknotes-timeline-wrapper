@@ -7,6 +7,7 @@ const { createCalendarHelpers } = require('./calendar-helpers');
 const { renderEvent, renderTask } = require('./agenda-renderers');
 const {
   searchAgendaItems, toggleCollapsed, isCurrentRender, findFocusTarget, dateWithExistingTime,
+  formatDayHeading,
 } = require('./agenda-model');
 const {
   limitRecurringOccurrences, collectAgendaDayKeys, withinLookahead, indexAgendaTasks,
@@ -473,7 +474,11 @@ class AgendaController {
       // Calendar events are independent of task filters and remain available.
       for (const key of dayKeys) {
         const events = eventBuckets.get(key) || [];
-        if (events.length) this.renderSection(root, moment(key, 'YYYY-MM-DD').format('dddd, MMM D'), events, cfg, false, false, key);
+        if (events.length) {
+          const day = moment(key, 'YYYY-MM-DD');
+          const offset = day.diff(today, 'days');
+          this.renderSection(root, formatDayHeading(day, key === todayKey, offset), events, cfg, false, false, key);
+        }
       }
     } else if (this.filter === 'todo') {
       allTasks.length
@@ -495,7 +500,7 @@ class AgendaController {
           : [];
         const dayEvents = withinLookahead(offset, eventDays) ? eventsFor(day) : [];
         const items = tasks.concat(dayEvents);
-        this.renderSection(root, key === todayKey ? 'Today' : day.format('dddd, MMM D'), items, cfg, false, false, key);
+        this.renderSection(root, formatDayHeading(day, key === todayKey, offset), items, cfg, false, false, key);
         any = true;
       }
       if (!any) this.empty(root, 'Nothing scheduled. Enjoy the quiet.');

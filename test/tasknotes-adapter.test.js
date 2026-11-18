@@ -222,7 +222,13 @@ describe('mapTaskInfo', () => {
     assert.equal(isStatusCompleted('open', cfg), false);
   });
 
-  it('returns null when the vault file cannot be resolved', () => {
-    assert.equal(mapTaskInfo({ path: 'missing.md', title: 'x' }, cfg, () => null), null);
+  it('uses a path stub when the vault file cannot be resolved yet', () => {
+    const mapped = mapTaskInfo({
+      path: 'TaskNotes/Tasks/missing.md',
+      title: 'x',
+    }, cfg, () => null);
+    assert.equal(mapped.title, 'x');
+    assert.equal(mapped.file.path, 'TaskNotes/Tasks/missing.md');
+    assert.equal(mapped.file.basename, 'missing');
   });
 });

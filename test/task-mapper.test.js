@@ -43,4 +43,16 @@ describe('mapTaskInfo defaults', () => {
     assert.equal(mapped.status, 'open');
     assert.equal(mapped.priority, 'none');
   });
+
+  it('stubs the file from the path when the vault has not indexed it', () => {
+    const cfg = {
+      taskTag: 'task',
+      defaultStatus: 'open',
+      statusMap: { open: { isCompleted: false } },
+    };
+    const mapped = mapTaskInfo({ path: 'Tasks/New task.md', title: 'New task' }, cfg, () => null);
+    assert.equal(mapped.file.path, 'Tasks/New task.md');
+    assert.equal(mapped.file.basename, 'New task');
+    assert.equal(mapped.path, 'Tasks/New task.md');
+  });
 });

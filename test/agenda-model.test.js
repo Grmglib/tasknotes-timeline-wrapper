@@ -10,6 +10,8 @@ const {
   findFocusTarget,
   dateWithExistingTime,
   taskPath,
+  formatDayHeading,
+  samePathSet,
 } = require('../src/agenda-model');
 
 const localDateKey = (value) => String(value || '').slice(0, 10) || null;
@@ -150,5 +152,19 @@ describe('agenda interaction state', () => {
   it('provides the task identity used by drag-and-drop', () => {
     assert.equal(taskPath({ path: 'Tasks/one.md', file: { path: 'fallback.md' } }), 'Tasks/one.md');
     assert.equal(taskPath({ file: { path: 'Tasks/two.md' } }), 'Tasks/two.md');
+  });
+
+  it('formats day headings for today, tomorrow, and later days', () => {
+    const fakeDay = { format: () => 'Wednesday, May 6' };
+    assert.equal(formatDayHeading(fakeDay, true, 0), 'Today');
+    assert.equal(formatDayHeading(fakeDay, false, 1), 'Tomorrow');
+    assert.equal(formatDayHeading(fakeDay, false, 2), 'Wednesday, May 6');
+  });
+
+  it('compares view filter path sets for equality', () => {
+    assert.equal(samePathSet(null, null), true);
+    assert.equal(samePathSet(new Set(['a.md', 'b.md']), new Set(['b.md', 'a.md'])), true);
+    assert.equal(samePathSet(new Set(['a.md']), new Set(['b.md'])), false);
+    assert.equal(samePathSet(new Set(['a.md']), null), false);
   });
 });

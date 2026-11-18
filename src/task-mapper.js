@@ -6,11 +6,18 @@ const { linkNames, orderTags } = require('./frontmatter');
  * Map a TaskNotes TaskInfo (or similar) into the timeline UI shape.
  * Does not filter by identification tag — listing comes from the Runtime API.
  */
+function fileStub(path) {
+  const name = path.split('/').pop() || path;
+  const basename = name.replace(/\.md$/i, '');
+  return { path, basename };
+}
+
 function mapTaskInfo(info, cfg, resolveFile) {
   if (!info || !info.path) return null;
   const path = String(info.path);
-  const file = typeof resolveFile === 'function' ? resolveFile(path) : null;
-  if (!file) return null;
+  const resolved = typeof resolveFile === 'function' ? resolveFile(path) : null;
+  // TaskNotes can list a task before the vault indexes the new file.
+  const file = resolved || fileStub(path);
 
   const status = info.status != null && info.status !== ''
     ? String(info.status)

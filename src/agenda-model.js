@@ -111,6 +111,21 @@ function taskPath(task) {
   return task.path || task.file.path;
 }
 
+function formatDayHeading(day, isToday, offset) {
+  if (isToday) return 'Today';
+  if (offset === 1) return 'Tomorrow';
+  return day.format('dddd, MMM D');
+}
+
+function samePathSet(a, b) {
+  if (a === b) return true;
+  if (!a || !b || a.size !== b.size) return false;
+  for (const item of a) {
+    if (!b.has(item)) return false;
+  }
+  return true;
+}
+
 module.exports = {
   parseSearchQuery,
   searchAgendaItems,
@@ -119,4 +134,6 @@ module.exports = {
   findFocusTarget,
   dateWithExistingTime,
   taskPath,
+  formatDayHeading,
+  samePathSet,
 };

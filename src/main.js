@@ -32,6 +32,7 @@ const {
 } = require('./calendar-events-cache');
 const { createTaskNotesAdapter } = require('./tasknotes-adapter');
 const { mapTaskInfo } = require('./task-mapper');
+const { samePathSet } = require('./agenda-model');
 
 const {
   eventDateKeys,
@@ -64,6 +65,10 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     this._activeCalendarErrors = new Set();
     this._viewPathCache = new Map();
     this._taskSnapshot = null;
+    this._taskPending = null;
+    this._taskFetchGen = 0;
+    this._hiddenTaskPaths = new Set();
+    this._agendaFollowUps = new Set();
     this._viewFilterGen = 0;
     this._viewFilterWarned = new Set();
     this._calendarCacheStore = createCalendarEventsCache(
@@ -84,39 +89,44 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
       ctx.addChild(new AgendaBlock(this, el, parseOptions(source)));
     });
 
-    this._refreshTasks = debounce(() => {
-      this.invalidateTaskCache();
-      this.renderAll();
-    }, 500);
     this._refreshViews = debounce(() => {
       this.invalidateViewFilterCache();
       this.renderAll();
     }, 500);
     this._refreshEverything = debounce(() => this.refreshAll(), 500);
-    this.register(() => this._refreshTasks.cancel());
+    this._pollChanges = debounce(() => {
+      void this.pollAgendaChanges();
+    }, 500);
     this.register(() => this._refreshViews.cancel());
     this.register(() => this._refreshEverything.cancel());
-    // TaskNotes lifecycle events are the authoritative task invalidation source.
-    // Metadata events remain a startup fallback until that subscription exists.
+    this.register(() => this._pollChanges.cancel());
+    this.register(() => this.clearAgendaFollowUps());
+    // Vault and metadata changes refresh the agenda even after TaskNotes lifecycle
+    // is subscribed. Those lifecycle events do not always arrive for create/delete,
+    // and a refresh that only clears the task snapshot leaves a Bases view filter stale.
     this.registerEvent(this.app.metadataCache.on('resolved', () => {
-      if (!this._lifecycleSubscribed) this._refreshTasks();
+      if (!this._lifecycleSubscribed) this.scheduleAgendaRefresh();
     }));
     this.registerEvent(this.app.metadataCache.on('changed', (file) => {
       if (file && file.extension === 'base') this._refreshViews();
-      else if (!this._lifecycleSubscribed) this._refreshTasks();
+      else this._pollChanges();
     }));
+    const isMarkdownPath = (file, path) => (file && file.extension === 'md') || String(path || '').endsWith('.md');
     const onBaseFileChange = (file) => {
       if (file && file.extension === 'base') this._refreshViews();
     };
     this.registerEvent(this.app.vault.on('modify', onBaseFileChange));
-    this.registerEvent(this.app.vault.on('create', onBaseFileChange));
+    this.registerEvent(this.app.vault.on('create', (file) => {
+      onBaseFileChange(file);
+      if (isMarkdownPath(file)) this.noteTaskFileChanged(null, file.path);
+    }));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
       if ((file && file.extension === 'base') || String(oldPath || '').endsWith('.base')) this._refreshViews();
-      else if (!this._lifecycleSubscribed) this._refreshTasks();
+      if (isMarkdownPath(file, oldPath)) this.noteTaskFileChanged(oldPath, file && file.path);
     }));
     this.registerEvent(this.app.vault.on('delete', (file) => {
       if (file && file.extension === 'base') this._refreshViews();
-      else if (!this._lifecycleSubscribed) this._refreshTasks();
+      if (isMarkdownPath(file)) this.noteTaskFileChanged(file && file.path, null);
     }));
     this.registerInterval(window.setInterval(() => {
       this.refreshAll();
@@ -148,6 +158,35 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
 
   invalidateTaskCache() {
     this._taskSnapshot = null;
+    this._taskPending = null;
+    this._taskFetchGen = (this._taskFetchGen || 0) + 1;
+  }
+
+  clearAgendaFollowUps() {
+    if (!this._agendaFollowUps) return;
+    for (const timer of this._agendaFollowUps) window.clearTimeout(timer);
+    this._agendaFollowUps.clear();
+  }
+
+  // Debounced refresh plus later retries. TaskNotes' list can lag the vault event
+  // that announced the new or deleted note; retries only re-render when data changed.
+  scheduleAgendaRefresh() {
+    this._refreshEverything();
+    this.clearAgendaFollowUps();
+    for (const delay of [1200, 3000]) {
+      const timer = window.setTimeout(() => {
+        this._agendaFollowUps.delete(timer);
+        if (!this._unloading) void this.pollAgendaChanges();
+      }, delay);
+      this._agendaFollowUps.add(timer);
+    }
+  }
+
+  noteTaskFileChanged(previousPath, nextPath) {
+    if (!this._hiddenTaskPaths) this._hiddenTaskPaths = new Set();
+    if (previousPath && previousPath !== nextPath) this._hiddenTaskPaths.add(previousPath);
+    if (nextPath) this._hiddenTaskPaths.delete(nextPath);
+    this.scheduleAgendaRefresh();
   }
 
   invalidateViewFilterCache() {
@@ -168,8 +207,11 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
   subscribeTaskNotesLifecycle() {
     if (this._lifecycleSubscribed) return;
     const ok = this.adapter.subscribeLifecycle(
-      () => this._refreshEverything(),
-      (ref) => this.registerEvent(ref),
+      () => this.scheduleAgendaRefresh(),
+      (ref) => {
+        if (typeof ref === 'function') this.register(ref);
+        else if (ref) this.registerEvent(ref);
+      },
     );
     if (ok) this._lifecycleSubscribed = true;
   }
@@ -328,29 +370,156 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     return this.adapter.getConfig();
   }
 
-  async getTasks(cfg) {
-    const compat = this.adapter.getCompatibility();
-    if (!compat.ok) {
-      this._taskSnapshot = null;
-      return [];
-    }
-    const key = JSON.stringify([
+  getTaskCacheKey(cfg) {
+    return JSON.stringify([
       cfg.defaultStatus,
       cfg.doneStatus,
       Object.keys(cfg.statusMap || {}).sort(),
       cfg.taskTag,
     ]);
-    if (this._taskSnapshot && this._taskSnapshot.key === key) return this._taskSnapshot.tasks;
+  }
 
-    const infos = await this.adapter.listTasks({ scope: { includeArchived: false } });
+  buildTaskSnapshot(cfg, key, gen, infos) {
     const out = [];
+    const signatureParts = [];
+    const listed = new Set();
     for (const info of infos) {
       if (info && info.archived) continue;
-      const mapped = mapTaskInfo(info, cfg, (path) => this.app.vault.getAbstractFileByPath(path));
-      if (mapped) out.push(mapped);
+      const path = info && info.path ? String(info.path) : '';
+      if (path && this._hiddenTaskPaths && this._hiddenTaskPaths.has(path)) {
+        listed.add(path);
+        continue;
+      }
+      let resolvedFile = null;
+      const mapped = mapTaskInfo(info, cfg, (taskPath) => {
+        resolvedFile = this.app.vault.getAbstractFileByPath(taskPath);
+        return resolvedFile;
+      });
+      if (mapped) {
+        out.push(mapped);
+        signatureParts.push([
+          mapped.path,
+          mapped.title,
+          mapped.status,
+          mapped.done,
+          mapped.priority,
+          mapped.due,
+          mapped.scheduled,
+          mapped.completedDate,
+          mapped.tags,
+          mapped.projects,
+          Boolean(resolvedFile),
+        ]);
+      }
     }
-    this._taskSnapshot = { key, tasks: out };
-    return out;
+    if (this._hiddenTaskPaths) {
+      for (const path of [...this._hiddenTaskPaths]) {
+        if (!listed.has(path)) this._hiddenTaskPaths.delete(path);
+      }
+    }
+    return {
+      key,
+      gen,
+      signature: JSON.stringify(signatureParts),
+      tasks: out,
+    };
+  }
+
+  async hasViewFilterChanges() {
+    if (!this._viewPathCache || !this._viewPathCache.size) return false;
+    const entries = [...this._viewPathCache.entries()];
+    const gen = this._viewFilterGen || 0;
+    for (const [cacheKey, pending] of entries) {
+      const prev = await pending;
+      if (gen !== (this._viewFilterGen || 0)) return false;
+      let parsed;
+      try {
+        parsed = JSON.parse(cacheKey);
+      } catch (e) {
+        return true;
+      }
+      const [basePath, viewName, cachedMtime] = parsed;
+      if (this.getBaseFileMtime(basePath) !== cachedMtime) return true;
+      const next = await this.queryViewTaskPaths(basePath, viewName, gen);
+      if (gen !== (this._viewFilterGen || 0)) return false;
+      if (next.status !== prev.status) return true;
+      if (!samePathSet(prev.paths, next.paths)) return true;
+    }
+    return false;
+  }
+
+  async pollAgendaChanges() {
+    if (this._unloading) return false;
+    const compat = this.adapter.getCompatibility();
+    if (!compat.ok) return false;
+    const prevSnapshot = this._taskSnapshot;
+    if (!prevSnapshot) {
+      if (this.controllers.size) {
+        this.refreshAll();
+        return true;
+      }
+      return false;
+    }
+    const cfg = this.getConfig();
+    const key = this.getTaskCacheKey(cfg);
+    if (prevSnapshot.key !== key) {
+      this.refreshAll();
+      return true;
+    }
+    const gen = this._taskFetchGen || 0;
+    try {
+      const infos = await this.adapter.listTasks({ scope: { includeArchived: false } });
+      if (this._unloading || gen !== (this._taskFetchGen || 0)) return false;
+      const nextSnapshot = this.buildTaskSnapshot(cfg, key, gen, infos);
+      if (nextSnapshot.signature !== prevSnapshot.signature) {
+        this._taskSnapshot = nextSnapshot;
+        this.invalidateViewFilterCache();
+        this.renderAll();
+        return true;
+      }
+      if (await this.hasViewFilterChanges()) {
+        this.invalidateViewFilterCache();
+        this.renderAll();
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async getTasks(cfg) {
+    const compat = this.adapter.getCompatibility();
+    if (!compat.ok) {
+      this._taskSnapshot = null;
+      this._taskPending = null;
+      return [];
+    }
+    const key = this.getTaskCacheKey(cfg);
+    for (;;) {
+      if (this._taskSnapshot && this._taskSnapshot.key === key) return this._taskSnapshot.tasks;
+      const gen = this._taskFetchGen || 0;
+      if (!this._taskPending || this._taskPending.key !== key || this._taskPending.gen !== gen) {
+        this._taskPending = {
+          key,
+          gen,
+          promise: this.adapter.listTasks({ scope: { includeArchived: false } }),
+        };
+      }
+      const pending = this._taskPending;
+      let infos;
+      try {
+        infos = await pending.promise;
+      } finally {
+        if (this._taskPending === pending) this._taskPending = null;
+      }
+      if (gen !== this._taskFetchGen) continue;
+      if (this._taskSnapshot && this._taskSnapshot.key === key && this._taskSnapshot.gen === gen) {
+        return this._taskSnapshot.tasks;
+      }
+      this._taskSnapshot = this.buildTaskSnapshot(cfg, key, gen, infos);
+      return this._taskSnapshot.tasks;
+    }
   }
 
   getCalendarEvents() {
@@ -676,16 +845,22 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
   // forceNewTab is the middle-click path — a new tab is the whole point there,
   // so it ignores the setting.
   openTask(file, evt, forceNewTab) {
+    const path = file && file.path;
+    const resolved = path ? this.app.vault.getAbstractFileByPath(path) : null;
+    if (!resolved) {
+      new Notice('Task file is not ready yet.');
+      return;
+    }
     const ws = this.app.workspace;
     const mode = evt ? Keymap.isModEvent(evt) : false;
-    if (mode) { ws.getLeaf(mode).openFile(file); return; }
-    if (!forceNewTab && !this.settings.openInNewTab) { ws.getLeaf(false).openFile(file); return; }
+    if (mode) { ws.getLeaf(mode).openFile(resolved); return; }
+    if (!forceNewTab && !this.settings.openInNewTab) { ws.getLeaf(false).openFile(resolved); return; }
     // getLeaf('tab') always builds a new one, so repeat clicks would stack
     // duplicate tabs of the same task — surface the existing one instead.
     const open = ws.getLeavesOfType('markdown')
-      .find((l) => l.view && l.view.file && l.view.file.path === file.path);
+      .find((l) => l.view && l.view.file && l.view.file.path === resolved.path);
     if (open) { ws.revealLeaf(open); ws.setActiveLeaf(open, { focus: true }); return; }
-    ws.getLeaf('tab').openFile(file);
+    ws.getLeaf('tab').openFile(resolved);
   }
 
   async resolveTaskInfo(task) {
