@@ -31,7 +31,7 @@ const {
   resolveCalendarEvents,
 } = require('./calendar-events-cache');
 const { createTaskNotesAdapter } = require('./tasknotes-adapter');
-const { mapTaskInfo } = require('./task-mapper');
+const { mapTaskInfo, completionTarget, recurringOccurrenceDate, isRecurringSeries } = require('./task-mapper');
 const { samePathSet } = require('./agenda-model');
 
 const {
@@ -42,6 +42,15 @@ const {
 } = createCalendarHelpers(moment, {
   maxRecurringOccurrences: DEFAULT_SETTINGS.maxRecurringOccurrences,
 });
+
+function recurringMenuDate(task) {
+  if (!isRecurringSeries(task)) return undefined;
+  const dateKey = recurringOccurrenceDate(task, moment().format('YYYY-MM-DD'));
+  if (!dateKey) return undefined;
+  const [year, month, day] = dateKey.split('-').map(Number);
+  if (!year || !month || !day) return undefined;
+  return new Date(year, month - 1, day);
+}
 
 module.exports = class TaskNotesTimelineWrapper extends Plugin {
   async onload() {
@@ -408,6 +417,8 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
           mapped.completedDate,
           mapped.tags,
           mapped.projects,
+          mapped.recurrence,
+          mapped.recurrenceAnchor,
           Boolean(resolvedFile),
         ]);
       }
@@ -496,7 +507,7 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
       return [];
     }
     const key = this.getTaskCacheKey(cfg);
-    for (;;) {
+    for (; ;) {
       if (this._taskSnapshot && this._taskSnapshot.key === key) return this._taskSnapshot.tasks;
       const gen = this._taskFetchGen || 0;
       if (!this._taskPending || this._taskPending.key !== key || this._taskPending.gen !== gen) {
@@ -740,13 +751,20 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     try {
       if (!task.done) {
         const previousStatus = task.status || cfg.defaultStatus;
-        await this.adapter.complete(path);
+        const target = completionTarget(task, moment().format('YYYY-MM-DD'));
+        if (target.kind === 'instance') {
+          await this.adapter.toggleCompleteInstance(path, target.date);
+        } else {
+          await this.adapter.complete(path);
+        }
         const record = {
           file: task.file,
           path,
           title: task.title,
           previousStatus,
           completedStatus: cfg.doneStatus,
+          recurring: target.kind === 'instance',
+          instanceDate: target.date,
         };
         const previous = this._completionUndos.get(path);
         if (previous) this.dismissCompletionUndo(previous);
@@ -763,7 +781,7 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     const path = task.path || (task.file && task.file.path);
     if (!path) throw new Error('Task path is unavailable.');
     const previous = this._taskMutations.get(path) || Promise.resolve();
-    const operation = previous.catch(() => {}).then(() => this.adapter.updateTask(path, patch));
+    const operation = previous.catch(() => { }).then(() => this.adapter.updateTask(path, patch));
     this._taskMutations.set(path, operation);
     try {
       await operation;
@@ -814,7 +832,11 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     record.button.disabled = true;
     this._statusUpdates.add(record.path);
     try {
-      await this.adapter.uncomplete(record.path, { status: record.previousStatus });
+      if (record.recurring) {
+        await this.adapter.toggleCompleteInstance(record.path, record.instanceDate);
+      } else {
+        await this.adapter.uncomplete(record.path, { status: record.previousStatus });
+      }
       this.dismissCompletionUndo(record);
       this.refreshAll();
       return true;
@@ -900,7 +922,12 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
   openTaskMenu(task, mouseEvent) {
     const path = task.path || (task.file && task.file.path);
     const onUpdate = () => this.refreshAll();
-    if (path && this.adapter.showTaskMenu({ taskPath: path, event: mouseEvent, onUpdate })) {
+    if (path && this.adapter.showTaskMenu({
+      taskPath: path,
+      event: mouseEvent,
+      onUpdate,
+      targetDate: recurringMenuDate(task),
+    })) {
       return;
     }
 
@@ -944,7 +971,12 @@ module.exports = class TaskNotesTimelineWrapper extends Plugin {
     const path = task.path || (task.file && task.file.path);
     if (!path) return;
     const onUpdate = () => this.refreshAll();
-    if (this.adapter.showTaskMenu({ taskPath: path, event: mouseEvent, onUpdate })) return;
+    if (this.adapter.showTaskMenu({
+      taskPath: path,
+      event: mouseEvent,
+      onUpdate,
+      targetDate: recurringMenuDate(task),
+    })) return;
     this.openTaskMenu(task, mouseEvent);
   }
 

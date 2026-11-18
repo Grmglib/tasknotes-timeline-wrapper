@@ -596,6 +596,15 @@ body.theme-dark.forest-theme-light .fw-agenda {
     padding: 10px;
   }
 
+  .fw-agenda button.fw-task__status {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+    flex: 0 0 32px;
+    padding: 0;
+  }
+
   .fw-agenda button.fw-stat,
   .fw-agenda button.fw-agenda__dayhead { min-height: 44px; }
 

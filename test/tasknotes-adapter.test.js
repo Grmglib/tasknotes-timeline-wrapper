@@ -102,6 +102,36 @@ describe('createTaskNotesAdapter mutations', () => {
     assert.equal(open.status, 'in-progress');
   });
 
+  it('completes one recurring occurrence without calling tasks.complete', async () => {
+    let completedSeries = false;
+    const adapter = createTaskNotesAdapter(mockApp({
+      api: mockApi({
+        capabilities: ['tasks.read', 'tasks.write', 'recurring.write'],
+        tasks: {
+          complete: async () => { completedSeries = true; },
+        },
+        api: {
+          recurring: {
+            toggleCompleteInstance: async (path, date, context) => ({ path, date, context }),
+          },
+        },
+      }),
+    }));
+    const result = await adapter.toggleCompleteInstance('Tasks/standup.md', '2026-09-25');
+    assert.equal(completedSeries, false);
+    assert.equal(result.path, 'Tasks/standup.md');
+    assert.equal(result.date, '2026-09-25');
+    assert.equal(result.context.source, SOURCE);
+  });
+
+  it('refuses instance completion when the recurring API is missing', async () => {
+    const adapter = createTaskNotesAdapter(mockApp({ api: mockApi() }));
+    await assert.rejects(
+      () => adapter.toggleCompleteInstance('Tasks/standup.md', '2026-09-25'),
+      /recurring instance completion is unavailable/i,
+    );
+  });
+
   it('listTasks uses api.tasks.list without local tag filtering', async () => {
     const listResult = [
       { path: 'Tasks/by-property.md', title: 'Property task', status: 'open', tags: [] },
